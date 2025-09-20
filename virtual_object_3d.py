@@ -27,9 +27,20 @@ class VirtualObject3D:
         self.is_grabbed = 0  # 0 = not grabbed, 1 = grabbed with 1 hand, 2 = grabbed with 2 hands
         self.grabbed_by_hand = []  # List of hand indices that are grabbing this object
         self.highlighted = False  # For object selection
+        self.selected = False  # Track selection state for highlighting
         
-        # Auto-rotation for demo purposes
-        self.auto_rotate = True
+        # Selection system for rotation
+        self.is_selected = False  # True when object is in selection mode for rotation
+        self.selection_hand_idx = None  # Hand index that selected this object
+        self.last_selection_hand_pos = None  # Last position of the selecting hand
+        
+        # Explicit rotation state tracking
+        self.is_in_rotation_mode = False  # True when object is in rotation mode (1 hand grabbing)
+        self.rotation_hand_idx = None  # Hand index that is controlling rotation (the open hand)
+        self.last_rotation_hand_pos = None  # Last position of the rotation hand
+        
+        # Auto-rotation disabled by default - objects only rotate when pinched
+        self.auto_rotate = False
         self.auto_rotation_speed = 0.02
         
         # Load 3D model
@@ -100,7 +111,11 @@ class VirtualObject3D:
         model_matrix = self.get_model_matrix()
         
         # Choose color based on state
-        if self.is_grabbed:
+        if self.is_in_rotation_mode:
+            color = (0, 255, 255)  # Cyan when in rotation mode
+        elif self.is_selected:
+            color = (255, 255, 0)  # Bright yellow when selected for rotation
+        elif self.is_grabbed:
             color = tuple(min(255, c + 80) for c in self.color)  # Brighter when grabbed
         elif self.highlighted:
             color = tuple(min(255, c + 40) for c in self.color)  # Slightly brighter when highlighted
@@ -118,6 +133,9 @@ class VirtualObject3D:
         # Draw bounding box if grabbed
         if self.is_grabbed:
             frame = self._draw_bounding_box(frame, renderer, model_matrix)
+        
+        # Draw pinchable radius highlighting
+        frame = self._draw_pinchable_radius(frame, renderer)
         
         return frame
     
@@ -153,18 +171,60 @@ class VirtualObject3D:
         
         return frame
     
+    def _draw_pinchable_radius(self, frame: np.ndarray, renderer: Renderer3D) -> np.ndarray:
+        """Draw the pinchable radius highlighting around the object"""
+        # Only draw if this object should show the radius (controlled by selected state)
+        # selected=True means show yellow, selected=False means show blue, None means don't show
+        if not hasattr(self, 'selected') or self.selected is None:
+            return frame
+            
+        # Calculate screen position directly without model matrix transformations
+        # This ensures the radius is always centered on the object's actual position
+        center_3d = np.array([[self.x, self.y, self.z, 1.0]])
+        
+        # Use only view and projection matrices, not the model matrix
+        vp_matrix = renderer.projection_matrix @ renderer.view_matrix
+        projected_center = center_3d @ vp_matrix.T
+        
+        if projected_center[0, 3] <= 0:  # Behind camera
+            return frame
+        
+        # Perspective divide
+        projected_center[:, :3] /= projected_center[:, 3:4]
+        
+        # Convert to screen coordinates
+        screen_x = (projected_center[0, 0] + 1) * renderer.width / 2
+        screen_y = (1 - projected_center[0, 1]) * renderer.height / 2
+        
+        center = (int(screen_x), int(screen_y))
+        
+        # Calculate pinchable radius based on the same logic as is_point_inside
+        pinchable_radius = int(max(45, self.bounding_box_size * 65 * self.scale))
+        
+        # Choose color based on selection state
+        if self.selected:
+            # Yellow highlighting when selected
+            color = (0, 255, 255)  # BGR format: Yellow
+        else:
+            # Blue highlighting when not selected
+            color = (255, 0, 0)  # BGR format: Blue
+        
+        # Draw the pinchable radius circle
+        cv2.circle(frame, center, pinchable_radius, color, 2)
+        
+        return frame
+    
     def is_point_inside(self, x: float, y: float, renderer: Renderer3D) -> bool:
         """Check if a 2D point is inside the projected 3D object"""
         if len(self.vertices) == 0:
             return False
         
-        # Project object center to screen space
+        # Project object center to screen space directly without model matrix transformations
         center_3d = np.array([[self.x, self.y, self.z, 1.0]])
-        model_matrix = self.get_model_matrix()
         
-        # Simple approach: project center and use bounding box size
-        mvp_matrix = renderer.projection_matrix @ renderer.view_matrix @ model_matrix
-        projected_center = center_3d @ mvp_matrix.T
+        # Use only view and projection matrices, not the model matrix
+        vp_matrix = renderer.projection_matrix @ renderer.view_matrix
+        projected_center = center_3d @ vp_matrix.T
         
         if projected_center[0, 3] <= 0:  # Behind camera
             return False
@@ -187,13 +247,12 @@ class VirtualObject3D:
         if len(self.vertices) == 0:
             return None
         
-        # Project object center to screen space
+        # Project object center to screen space directly without model matrix transformations
         center_3d = np.array([[self.x, self.y, self.z, 1.0]])
-        model_matrix = self.get_model_matrix()
         
-        # Transform to screen coordinates
-        mvp_matrix = renderer.projection_matrix @ renderer.view_matrix @ model_matrix
-        projected_center = center_3d @ mvp_matrix.T
+        # Use only view and projection matrices, not the model matrix
+        vp_matrix = renderer.projection_matrix @ renderer.view_matrix
+        projected_center = center_3d @ vp_matrix.T
         
         if projected_center[0, 3] <= 0:  # Behind camera
             return None
