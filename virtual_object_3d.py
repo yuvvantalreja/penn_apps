@@ -29,8 +29,13 @@ class VirtualObject3D:
         self.highlighted = False  # For object selection
         self.selected = False  # Track selection state for highlighting
         
-        # Auto-rotation for demo purposes
-        self.auto_rotate = True
+        # Selection system for rotation
+        self.is_selected = False  # True when object is in selection mode for rotation
+        self.selection_hand_idx = None  # Hand index that selected this object
+        self.last_selection_hand_pos = None  # Last position of the selecting hand
+        
+        # Auto-rotation disabled by default - objects only rotate when pinched
+        self.auto_rotate = False
         self.auto_rotation_speed = 0.02
         
         # Load 3D model
@@ -101,7 +106,9 @@ class VirtualObject3D:
         model_matrix = self.get_model_matrix()
         
         # Choose color based on state
-        if self.is_grabbed:
+        if self.is_selected:
+            color = (255, 255, 0)  # Bright yellow when selected for rotation
+        elif self.is_grabbed:
             color = tuple(min(255, c + 80) for c in self.color)  # Brighter when grabbed
         elif self.highlighted:
             color = tuple(min(255, c + 40) for c in self.color)  # Slightly brighter when highlighted
@@ -159,6 +166,11 @@ class VirtualObject3D:
     
     def _draw_pinchable_radius(self, frame: np.ndarray, renderer: Renderer3D) -> np.ndarray:
         """Draw the pinchable radius highlighting around the object"""
+        # Only draw if this object should show the radius (controlled by selected state)
+        # selected=True means show yellow, selected=False means show blue, None means don't show
+        if not hasattr(self, 'selected') or self.selected is None:
+            return frame
+            
         # Calculate screen position directly without model matrix transformations
         # This ensures the radius is always centered on the object's actual position
         center_3d = np.array([[self.x, self.y, self.z, 1.0]])
