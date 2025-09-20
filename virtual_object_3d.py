@@ -27,6 +27,7 @@ class VirtualObject3D:
         self.is_grabbed = 0  # 0 = not grabbed, 1 = grabbed with 1 hand, 2 = grabbed with 2 hands
         self.grabbed_by_hand = []  # List of hand indices that are grabbing this object
         self.highlighted = False  # For object selection
+        self.selected = False  # Track selection state for highlighting
         
         # Auto-rotation for demo purposes
         self.auto_rotate = True
@@ -119,6 +120,9 @@ class VirtualObject3D:
         if self.is_grabbed:
             frame = self._draw_bounding_box(frame, renderer, model_matrix)
         
+        # Draw pinchable radius highlighting
+        frame = self._draw_pinchable_radius(frame, renderer)
+        
         return frame
     
     def _draw_bounding_box(self, frame: np.ndarray, renderer: Renderer3D, model_matrix: np.ndarray) -> np.ndarray:
@@ -153,18 +157,55 @@ class VirtualObject3D:
         
         return frame
     
+    def _draw_pinchable_radius(self, frame: np.ndarray, renderer: Renderer3D) -> np.ndarray:
+        """Draw the pinchable radius highlighting around the object"""
+        # Calculate screen position directly without model matrix transformations
+        # This ensures the radius is always centered on the object's actual position
+        center_3d = np.array([[self.x, self.y, self.z, 1.0]])
+        
+        # Use only view and projection matrices, not the model matrix
+        vp_matrix = renderer.projection_matrix @ renderer.view_matrix
+        projected_center = center_3d @ vp_matrix.T
+        
+        if projected_center[0, 3] <= 0:  # Behind camera
+            return frame
+        
+        # Perspective divide
+        projected_center[:, :3] /= projected_center[:, 3:4]
+        
+        # Convert to screen coordinates
+        screen_x = (projected_center[0, 0] + 1) * renderer.width / 2
+        screen_y = (1 - projected_center[0, 1]) * renderer.height / 2
+        
+        center = (int(screen_x), int(screen_y))
+        
+        # Calculate pinchable radius based on the same logic as is_point_inside
+        pinchable_radius = int(max(45, self.bounding_box_size * 65 * self.scale))
+        
+        # Choose color based on selection state
+        if self.selected:
+            # Yellow highlighting when selected
+            color = (0, 255, 255)  # BGR format: Yellow
+        else:
+            # Blue highlighting when not selected
+            color = (255, 0, 0)  # BGR format: Blue
+        
+        # Draw the pinchable radius circle
+        cv2.circle(frame, center, pinchable_radius, color, 2)
+        
+        return frame
+    
     def is_point_inside(self, x: float, y: float, renderer: Renderer3D) -> bool:
         """Check if a 2D point is inside the projected 3D object"""
         if len(self.vertices) == 0:
             return False
         
-        # Project object center to screen space
+        # Project object center to screen space directly without model matrix transformations
         center_3d = np.array([[self.x, self.y, self.z, 1.0]])
-        model_matrix = self.get_model_matrix()
         
-        # Simple approach: project center and use bounding box size
-        mvp_matrix = renderer.projection_matrix @ renderer.view_matrix @ model_matrix
-        projected_center = center_3d @ mvp_matrix.T
+        # Use only view and projection matrices, not the model matrix
+        vp_matrix = renderer.projection_matrix @ renderer.view_matrix
+        projected_center = center_3d @ vp_matrix.T
         
         if projected_center[0, 3] <= 0:  # Behind camera
             return False
@@ -187,13 +228,12 @@ class VirtualObject3D:
         if len(self.vertices) == 0:
             return None
         
-        # Project object center to screen space
+        # Project object center to screen space directly without model matrix transformations
         center_3d = np.array([[self.x, self.y, self.z, 1.0]])
-        model_matrix = self.get_model_matrix()
         
-        # Transform to screen coordinates
-        mvp_matrix = renderer.projection_matrix @ renderer.view_matrix @ model_matrix
-        projected_center = center_3d @ mvp_matrix.T
+        # Use only view and projection matrices, not the model matrix
+        vp_matrix = renderer.projection_matrix @ renderer.view_matrix
+        projected_center = center_3d @ vp_matrix.T
         
         if projected_center[0, 3] <= 0:  # Behind camera
             return None

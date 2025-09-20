@@ -20,12 +20,22 @@ class VirtualObject:
         self.shape = shape
         self.is_grabbed = 0  # 0 = not grabbed, 1 = grabbed with 1 hand, 2 = grabbed with 2 hands
         self.grabbed_by_hand = []  # List of hand indices that are grabbing this object
-        self.z_depth = 0.0 
+        self.z_depth = 0.0
+        self.selected = False  # Track selection state for highlighting 
         
     def draw(self, frame: np.ndarray) -> np.ndarray:
         """Draw the virtual object on the frame"""
         center = (int(self.x), int(self.y))
         radius = int(self.size)
+        
+        # Draw pinchable radius highlighting - make radius match actual object size
+        pinchable_radius = int(self.size)  # Use actual object size for pinchable radius
+        if self.selected:
+            # Yellow highlighting when selected
+            cv2.circle(frame, center, pinchable_radius, (0, 255, 255), 2)  # Yellow outline
+        else:
+            # Blue highlighting when not selected
+            cv2.circle(frame, center, pinchable_radius, (255, 0, 0), 2)  # Blue outline
         
         if self.shape == "circle":
             for i in range(radius, 0, -2):
@@ -313,6 +323,7 @@ class ARHandController:
         print("- Press 't' to toggle auto-rotation")
         print("- Press 'x/y/z' to reset rotation on specific axis")
         print("- Press 'space' to cycle through 3D objects")
+        print("- Press 's' to cycle through 2D objects")
         
         while self.is_running:
             self._process_frame()
@@ -417,20 +428,45 @@ class ARHandController:
                 obj_3d.rotation_z = 0.0
             print("Reset Z-axis rotation")
         elif key == ord(' '):  # Spacebar
-            # Cycle through 3D objects (highlight next one)
+            # Cycle through 3D objects (select next one)
             if self.objects_3d:
-                # Find currently highlighted object or start with first
-                current_highlighted = -1
+                # Find currently selected object or start with first
+                current_selected = -1
                 for i, obj_3d in enumerate(self.objects_3d):
-                    if hasattr(obj_3d, 'highlighted') and obj_3d.highlighted:
-                        current_highlighted = i
-                        obj_3d.highlighted = False
+                    if obj_3d.selected and not obj_3d.is_grabbed:  # Don't cycle away from grabbed objects
+                        current_selected = i
+                        obj_3d.selected = False
                         break
                 
-                # Highlight next object
-                next_index = (current_highlighted + 1) % len(self.objects_3d)
-                self.objects_3d[next_index].highlighted = True
+                # Select next object (skip grabbed objects)
+                next_index = (current_selected + 1) % len(self.objects_3d)
+                attempts = 0
+                while self.objects_3d[next_index].is_grabbed and attempts < len(self.objects_3d):
+                    next_index = (next_index + 1) % len(self.objects_3d)
+                    attempts += 1
+                
+                self.objects_3d[next_index].selected = True
                 print(f"Selected 3D object {next_index + 1}/{len(self.objects_3d)}")
+        elif key == ord('s'):  # 'S' key for cycling 2D objects
+            # Cycle through 2D objects (select next one)
+            if self.objects:
+                # Find currently selected object or start with first
+                current_selected = -1
+                for i, obj in enumerate(self.objects):
+                    if obj.selected and not obj.is_grabbed:  # Don't cycle away from grabbed objects
+                        current_selected = i
+                        obj.selected = False
+                        break
+                
+                # Select next object (skip grabbed objects)
+                next_index = (current_selected + 1) % len(self.objects)
+                attempts = 0
+                while self.objects[next_index].is_grabbed and attempts < len(self.objects):
+                    next_index = (next_index + 1) % len(self.objects)
+                    attempts += 1
+                
+                self.objects[next_index].selected = True
+                print(f"Selected 2D object {next_index + 1}/{len(self.objects)}")
     
     def _process_interactions(self, hands_info: List[dict]):
         """Process hand interactions with objects"""
@@ -476,6 +512,9 @@ class ARHandController:
                         obj.grabbed_by_hand.remove(hand_idx)
                     # Update grab state based on remaining hands
                     obj.is_grabbed = len(obj.grabbed_by_hand)
+                    # Deselect object when completely released
+                    if obj.is_grabbed == 0:
+                        obj.selected = False
                     
                     # Reset scaling state if transitioning from two-hand to one-hand or no hands
                     if obj.is_grabbed < 2:
@@ -498,6 +537,9 @@ class ARHandController:
                         obj_3d.grabbed_by_hand.remove(hand_idx)
                     # Update grab state based on remaining hands
                     obj_3d.is_grabbed = len(obj_3d.grabbed_by_hand)
+                    # Deselect object when completely released
+                    if obj_3d.is_grabbed == 0:
+                        obj_3d.selected = False
                     
                     # Reset scaling state if transitioning from two-hand to one-hand or no hands
                     if obj_3d.is_grabbed < 2:
@@ -599,8 +641,8 @@ class ARHandController:
             
             for obj in self.objects:
                 if obj.is_grabbed < 2:  # Allow grabbing if not already grabbed by 2 hands
-                    # Use much larger grab area for easier grabbing
-                    grab_radius = obj.size * 2.0  # Increased from 1.5 to 2.0
+                    # Use actual object size for grab radius to match pinchable radius
+                    grab_radius = obj.size
                     distance = math.sqrt((obj.x - pinch_center[0]) ** 2 + (obj.y - pinch_center[1]) ** 2)
                     if distance <= grab_radius and distance < closest_distance:
                         closest_distance = distance
@@ -612,6 +654,8 @@ class ARHandController:
                     closest_obj.grabbed_by_hand.append(hand_idx)
                 # Update grab state based on number of hands
                 closest_obj.is_grabbed = len(closest_obj.grabbed_by_hand)
+                # Mark object as selected when grabbed
+                closest_obj.selected = True
                 self.grab_states[hand_idx] = {
                     'object': closest_obj,
                     'initial_pinch_distance': pinch_distance,
@@ -749,6 +793,8 @@ class ARHandController:
                     closest_obj_3d.grabbed_by_hand.append(hand_idx)
                 # Update grab state based on number of hands
                 closest_obj_3d.is_grabbed = len(closest_obj_3d.grabbed_by_hand)
+                # Mark object as selected when grabbed
+                closest_obj_3d.selected = True
                 
                 # Get the current 3D object's screen position for calculating grab offset
                 current_screen_pos = closest_obj_3d.get_screen_position(self.renderer_3d)
@@ -763,7 +809,6 @@ class ARHandController:
                     'last_pinch_center': pinch_center,
                     'last_thumb_pos': thumb_pos,
                     'last_index_pos': index_pos,
-                    'smoothing_factor': 0.1,  # For smooth movement (lower = more responsive)
                     'movement_sensitivity': 0.015  # Controls how much screen movement affects 3D position (increased for better responsiveness)
                 }
                 return True
@@ -787,10 +832,9 @@ class ARHandController:
                 world_delta_x = pinch_delta_x * sensitivity
                 world_delta_y = -pinch_delta_y * sensitivity  # Invert Y for correct direction
                 
-                # Apply movement with smoothing
-                smoothing = grab_state['smoothing_factor']
-                obj_3d.x += world_delta_x * (1 - smoothing)
-                obj_3d.y += world_delta_y * (1 - smoothing)
+                # Apply movement directly without smoothing for immediate response
+                obj_3d.x += world_delta_x
+                obj_3d.y += world_delta_y
             
             # Only scale if object is grabbed by two hands
             if obj_3d.is_grabbed == 2:
