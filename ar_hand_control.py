@@ -102,15 +102,36 @@ class HandGestureDetector:
         
         pinch_distance = math.sqrt((thumb_pos[0] - index_pos[0]) ** 2 + (thumb_pos[1] - index_pos[1]) ** 2)
         
+        # Calculate pinch center for better tracking
+        pinch_center = ((thumb_pos[0] + index_pos[0]) // 2, (thumb_pos[1] + index_pos[1]) // 2)
+        
+        # More reliable pinch detection with multiple criteria
+        # Check if fingers are actually bent (not just close together)
+        thumb_bent = thumb_tip.x < landmarks.landmark[3].x  # Thumb is bent inward
+        index_bent = index_tip.y > landmarks.landmark[6].y  # Index finger is bent down
+        
+        # Much more lenient pinch detection - prioritize distance over finger position
+        # Primary method: distance-based
+        is_pinching = (pinch_distance < 60 and  # Increased distance threshold
+                      pinch_distance > 10 and  # Not too close (avoid noise)
+                      (thumb_bent or index_bent or pinch_distance < 35))  # Either finger bent OR very close
+        
+        # Fallback method: if distance is very close, always consider it pinching
+        if pinch_distance < 25:
+            is_pinching = True
+        
         return {
             'thumb_pos': thumb_pos,
             'index_pos': index_pos,
             'middle_pos': middle_pos,
             'palm_center': palm_center,
+            'pinch_center': pinch_center,
             'wrist_pos': wrist_pos,
             'gestures': gestures,
             'pinch_distance': pinch_distance,
-            'is_pinching': pinch_distance < 40
+            'is_pinching': is_pinching,
+            'thumb_bent': thumb_bent,
+            'index_bent': index_bent
         }
     
     def _detect_gestures(self, landmarks) -> List[str]:
@@ -174,6 +195,9 @@ class ARHandController:
         # Interaction state
         self.grab_states = {}  # hand_idx -> {object, initial_pinch_distance, initial_size}
         self.last_frame_time = time.time()
+        
+        # Pinch state tracking for hysteresis
+        self.pinch_states = {}  # hand_idx -> {'was_pinching': bool, 'pinch_frames': int}
         
         # Create some initial objects
         self._create_initial_objects()
@@ -278,8 +302,28 @@ class ARHandController:
         
         for hand_info in hands_info:
             hand_idx = hand_info['hand_idx']
+            is_pinching = hand_info['is_pinching']
             
-            if hand_info['is_pinching']:
+            # Initialize pinch state if not exists
+            if hand_idx not in self.pinch_states:
+                self.pinch_states[hand_idx] = {'was_pinching': False, 'pinch_frames': 0}
+            
+            pinch_state = self.pinch_states[hand_idx]
+            
+            # Reduced hysteresis: require 1 frame to start, 2 frames to stop
+            if is_pinching:
+                pinch_state['pinch_frames'] += 1
+                if pinch_state['pinch_frames'] >= 1:  # Start pinching after 1 frame
+                    pinch_state['was_pinching'] = True
+            else:
+                pinch_state['pinch_frames'] = max(0, pinch_state['pinch_frames'] - 1)
+                if pinch_state['pinch_frames'] == 0:  # Stop pinching after 2 frames
+                    pinch_state['was_pinching'] = False
+            
+            # Use the stabilized pinch state
+            stabilized_pinching = pinch_state['was_pinching']
+            
+            if stabilized_pinching:
                 self._handle_pinch_interaction(hand_info, hand_idx)
                 current_grabs.add(hand_idx)
             else:
@@ -301,31 +345,48 @@ class ARHandController:
         
         for hand_idx in hands_to_remove:
             del self.grab_states[hand_idx]
+            # Also clean up pinch state
+            if hand_idx in self.pinch_states:
+                del self.pinch_states[hand_idx]
     
     def _handle_pinch_interaction(self, hand_info: dict, hand_idx: int):
-        """Handle pinch gesture interaction"""
-        index_pos = hand_info['index_pos']
+        """Handle pinch gesture interaction with improved tracking"""
+        pinch_center = hand_info['pinch_center']
         pinch_distance = hand_info['pinch_distance']
         
         if hand_idx not in self.grab_states:
-            # Try to grab an object
+            # Try to grab an object - use pinch center for better accuracy
+            closest_obj = None
+            closest_distance = float('inf')
+            
             for obj in self.objects:
-                if obj.is_point_inside(index_pos[0], index_pos[1]) and not obj.is_grabbed:
-                    obj.is_grabbed = True
-                    obj.grabbed_by_hand = hand_idx
-                    self.grab_states[hand_idx] = {
-                        'object': obj,
-                        'initial_pinch_distance': pinch_distance,
-                        'initial_size': obj.size
-                    }
-                    break
+                if not obj.is_grabbed:
+                    # Use much larger grab area for easier grabbing
+                    grab_radius = obj.size * 2.0  # Increased from 1.5 to 2.0
+                    distance = math.sqrt((obj.x - pinch_center[0]) ** 2 + (obj.y - pinch_center[1]) ** 2)
+                    if distance <= grab_radius and distance < closest_distance:
+                        closest_distance = distance
+                        closest_obj = obj
+            
+            if closest_obj:
+                closest_obj.is_grabbed = True
+                closest_obj.grabbed_by_hand = hand_idx
+                self.grab_states[hand_idx] = {
+                    'object': closest_obj,
+                    'initial_pinch_distance': pinch_distance,
+                    'initial_size': closest_obj.size,
+                    'grab_offset_x': pinch_center[0] - closest_obj.x,
+                    'grab_offset_y': pinch_center[1] - closest_obj.y
+                }
         else:
             # Continue interaction with grabbed object
             grab_state = self.grab_states[hand_idx]
             obj = grab_state['object']
             
-            # Move object to hand position
-            obj.move_to(index_pos[0], index_pos[1])
+            # Move object with offset for natural feel
+            target_x = pinch_center[0] - grab_state['grab_offset_x']
+            target_y = pinch_center[1] - grab_state['grab_offset_y']
+            obj.move_to(target_x, target_y)
             
             # Scale object based on pinch distance change
             initial_distance = grab_state['initial_pinch_distance']
@@ -361,28 +422,45 @@ class ARHandController:
             cv2.putText(frame, instruction, (10, y_pos), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
         
-        # Draw hand status
+        # Draw hand status with pinch feedback
         for hand_info in hands_info:
             hand_idx = hand_info['hand_idx']
             palm_pos = hand_info['palm_center']
+            pinch_center = hand_info['pinch_center']
             
             # Draw palm center
             cv2.circle(frame, palm_pos, 8, (0, 255, 0), -1)
             
-            # Show pinch status
-            if hand_info['is_pinching']:
-                status = "PINCHING"
-                color = (0, 0, 255)
+            # Draw pinch center
+            cv2.circle(frame, pinch_center, 5, (255, 0, 255), -1)
+            
+            # Show pinch status with more detail
+            is_pinching = hand_info['is_pinching']
+            stabilized_pinching = hand_idx in self.pinch_states and self.pinch_states[hand_idx]['was_pinching']
+            
+            if stabilized_pinching:
+                status = "PINCHING ✓"
+                color = (0, 255, 0)  # Green for successful pinch
                 if hand_idx in self.grab_states:
                     obj = self.grab_states[hand_idx]['object']
-                    status = f"GRABBED (Size: {int(obj.size)})"
+                    status = f"GRABBED ✓ (Size: {int(obj.size)})"
+                    color = (255, 255, 0)  # Yellow for grabbed
+            elif is_pinching:
+                status = "PINCHING..."
+                color = (0, 255, 255)  # Cyan for detecting
             else:
                 status = "OPEN"
-                color = (0, 255, 0)
+                color = (128, 128, 128)  # Gray for open
             
             cv2.putText(frame, f"Hand {hand_idx}: {status}", 
-                       (palm_pos[0] - 50, palm_pos[1] - 20),
+                       (palm_pos[0] - 60, palm_pos[1] - 25),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+            
+            # Show pinch distance
+            pinch_distance = hand_info['pinch_distance']
+            cv2.putText(frame, f"Distance: {int(pinch_distance)}", 
+                       (palm_pos[0] - 30, palm_pos[1] + 15),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
         
         return frame
     
