@@ -4,6 +4,9 @@ import numpy as np
 import math
 from typing import List, Tuple, Optional
 import time
+import os
+from renderer_3d import Renderer3D
+from virtual_object_3d import VirtualObject3D
 
 class VirtualObject:
     """Represents a virtual object that can be manipulated in AR space"""
@@ -189,36 +192,100 @@ class ARHandController:
     def __init__(self):
         self.detector = HandGestureDetector()
         self.objects: List[VirtualObject] = []
+        self.objects_3d: List[VirtualObject3D] = []
         self.cap = None
         self.is_running = False
         
+        # 3D Renderer
+        self.renderer_3d = None
+        
         # Interaction state
         self.grab_states = {}  # hand_idx -> {object, initial_pinch_distance, initial_size}
+        self.grab_states_3d = {}  # hand_idx -> {object, initial_pinch_distance, initial_size, last_hand_pos}
         self.last_frame_time = time.time()
         
         # Pinch state tracking for hysteresis
         self.pinch_states = {}  # hand_idx -> {'was_pinching': bool, 'pinch_frames': int}
+        
+        # Display mode
+        self.show_3d_objects = True
+        self.show_2d_objects = True
         
         # Create some initial objects
         self._create_initial_objects()
         
     def _create_initial_objects(self):
         """Create initial virtual objects"""
+        # 2D objects
         self.objects = [
             VirtualObject(200, 200, 60, (0, 255, 255), "circle"),  # Yellow ball
             VirtualObject(400, 300, 80, (255, 100, 100), "cube"),   # Blue cube
             VirtualObject(600, 250, 50, (100, 255, 100), "circle"), # Green ball
         ]
+        
+        # 3D objects
+        self.objects_3d = []
+        
+        # Load multiple CAD components for testing
+        cad_models = [
+            {
+                "path": "complex_cad_assembly.obj",
+                "name": "Complex CAD Assembly",
+                "position": (0.0, 0.0, -4.0),
+                "scale": 1.2,
+                "color": (100, 150, 255)
+            },
+            {
+                "path": "simple_cad_assembly.obj",
+                "name": "Simple CAD Assembly",
+                "position": (-3.0, 0.0, -3.5),
+                "scale": 0.8,
+                "color": (255, 150, 100)
+            },
+            {
+                "path": "objtest_yup.obj", 
+                "name": "Test Object",
+                "position": (3.0, 0.0, -3.0),
+                "scale": 0.5,
+                "color": (150, 100, 200)
+            },
+            {
+                "path": "bow.obj",
+                "name": "Bow Model", 
+                "position": (0.0, 2.0, -5.0),
+                "scale": 0.3,
+                "color": (200, 150, 100)
+            }
+        ]
+        
+        for model_info in cad_models:
+            model_path = os.path.join(os.path.dirname(__file__), model_info["path"])
+            if os.path.exists(model_path):
+                obj_3d = VirtualObject3D(
+                    model_path, 
+                    x=model_info["position"][0], 
+                    y=model_info["position"][1], 
+                    z=model_info["position"][2],
+                    scale=model_info["scale"], 
+                    color=model_info["color"]
+                )
+                obj_3d.set_render_mode("solid")
+                # Set different auto-rotation speeds for variety
+                obj_3d.auto_rotation_speed = 0.01 + len(self.objects_3d) * 0.005
+                self.objects_3d.append(obj_3d)
+                print(f"✅ Loaded {model_info['name']} from {model_info['path']}")
+            else:
+                print(f"⚠️  {model_info['name']} not found at {model_path}")
     
     def start(self):
         """Start the AR application"""
         # Try different camera indices
-        camera_indices = [0, 1, 2]  # Try multiple camera sources
+        camera_indices = [0]  # Try multiple camera sources
         self.cap = None
         
         for idx in camera_indices:
             print(f"Trying camera index {idx}...")
-            test_cap = cv2.VideoCapture(idx)
+            test_cap = cv2.VideoCapture(0)
             if test_cap.isOpened():
                 # Test if we can actually read a frame
                 ret, frame = test_cap.read()
@@ -243,15 +310,26 @@ class ARHandController:
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
         
+        # Initialize 3D renderer
+        self.renderer_3d = Renderer3D(1280, 720)
+        
         self.is_running = True
         print("AR Hand Control started!")
         print("Gestures:")
         print("- Pinch (thumb + index) near object: Grab object")
         print("- Move hand while pinching: Move object")
         print("- Pinch and spread: Scale object")
+        print("- Two hands: Rotate 3D objects")
+        print("Controls:")
         print("- Press 'q' to quit")
         print("- Press 'r' to reset objects")
-        print("- Press 'c' to add new object")
+        print("- Press 'c' to add new 2D object")
+        print("- Press '1' to toggle 2D objects")
+        print("- Press '2' to toggle 3D objects")
+        print("- Press 'w' to toggle wireframe/solid rendering")
+        print("- Press 't' to toggle auto-rotation")
+        print("- Press 'x/y/z' to reset rotation on specific axis")
+        print("- Press 'space' to cycle through 3D objects")
         
         while self.is_running:
             self._process_frame()
@@ -273,9 +351,15 @@ class ARHandController:
         # Process interactions
         self._process_interactions(hands_info)
         
-        # Draw objects
-        for obj in self.objects:
-            frame = obj.draw(frame)
+        # Draw 2D objects
+        if self.show_2d_objects:
+            for obj in self.objects:
+                frame = obj.draw(frame)
+        
+        # Draw 3D objects
+        if self.show_3d_objects and self.renderer_3d:
+            for obj_3d in self.objects_3d:
+                frame = obj_3d.draw(frame, self.renderer_3d)
             
         # Draw hand landmarks
         frame = self.detector.draw_landmarks(frame, hands_info)
@@ -293,12 +377,64 @@ class ARHandController:
         elif key == ord('r'):
             self._create_initial_objects()
             self.grab_states.clear()
+            self.grab_states_3d.clear()
         elif key == ord('c'):
             self._add_random_object()
+        elif key == ord('1'):
+            self.show_2d_objects = not self.show_2d_objects
+            print(f"2D objects: {'ON' if self.show_2d_objects else 'OFF'}")
+        elif key == ord('2'):
+            self.show_3d_objects = not self.show_3d_objects
+            print(f"3D objects: {'ON' if self.show_3d_objects else 'OFF'}")
+        elif key == ord('w'):
+            # Toggle wireframe/solid for 3D objects
+            for obj_3d in self.objects_3d:
+                if obj_3d.render_mode == "solid":
+                    obj_3d.set_render_mode("wireframe")
+                else:
+                    obj_3d.set_render_mode("solid")
+            print(f"3D render mode: {self.objects_3d[0].render_mode if self.objects_3d else 'N/A'}")
+        elif key == ord('t'):
+            # Toggle auto-rotation for 3D objects
+            for obj_3d in self.objects_3d:
+                obj_3d.toggle_auto_rotation()
+            auto_rotate_status = self.objects_3d[0].auto_rotate if self.objects_3d else False
+            print(f"Auto-rotation: {'ON' if auto_rotate_status else 'OFF'}")
+        elif key == ord('x'):
+            # Reset X-axis rotation for all 3D objects
+            for obj_3d in self.objects_3d:
+                obj_3d.rotation_x = 0.0
+            print("Reset X-axis rotation")
+        elif key == ord('y'):
+            # Reset Y-axis rotation for all 3D objects
+            for obj_3d in self.objects_3d:
+                obj_3d.rotation_y = 0.0
+            print("Reset Y-axis rotation")
+        elif key == ord('z'):
+            # Reset Z-axis rotation for all 3D objects
+            for obj_3d in self.objects_3d:
+                obj_3d.rotation_z = 0.0
+            print("Reset Z-axis rotation")
+        elif key == ord(' '):  # Spacebar
+            # Cycle through 3D objects (highlight next one)
+            if self.objects_3d:
+                # Find currently highlighted object or start with first
+                current_highlighted = -1
+                for i, obj_3d in enumerate(self.objects_3d):
+                    if hasattr(obj_3d, 'highlighted') and obj_3d.highlighted:
+                        current_highlighted = i
+                        obj_3d.highlighted = False
+                        break
+                
+                # Highlight next object
+                next_index = (current_highlighted + 1) % len(self.objects_3d)
+                self.objects_3d[next_index].highlighted = True
+                print(f"Selected 3D object {next_index + 1}/{len(self.objects_3d)}")
     
     def _process_interactions(self, hands_info: List[dict]):
         """Process hand interactions with objects"""
         current_grabs = set()
+        current_grabs_3d = set()
         
         for hand_info in hands_info:
             hand_idx = hand_info['hand_idx']
@@ -323,15 +459,31 @@ class ARHandController:
             stabilized_pinching = pinch_state['was_pinching']
             
             if stabilized_pinching:
-                self._handle_pinch_interaction(hand_info, hand_idx)
-                current_grabs.add(hand_idx)
+                # Try 3D objects first
+                if self.show_3d_objects and self._handle_pinch_interaction_3d(hand_info, hand_idx):
+                    current_grabs_3d.add(hand_idx)
+                # Then try 2D objects
+                elif self.show_2d_objects:
+                    self._handle_pinch_interaction(hand_info, hand_idx)
+                    current_grabs.add(hand_idx)
             else:
-                # Release any grabbed object
+                # Release any grabbed 2D object
                 if hand_idx in self.grab_states:
                     obj = self.grab_states[hand_idx]['object']
                     obj.is_grabbed = False
                     obj.grabbed_by_hand = None
                     del self.grab_states[hand_idx]
+                
+                # Release any grabbed 3D object
+                if hand_idx in self.grab_states_3d:
+                    obj_3d = self.grab_states_3d[hand_idx]['object']
+                    obj_3d.is_grabbed = False
+                    obj_3d.grabbed_by_hand = None
+                    del self.grab_states_3d[hand_idx]
+        
+        # Handle two-hand rotation for 3D objects
+        if len(hands_info) >= 2 and len(self.objects_3d) > 0:
+            self._handle_two_hand_rotation(hands_info)
         
         # Clean up grab states for hands that are no longer detected
         hands_to_remove = []
@@ -348,13 +500,30 @@ class ARHandController:
             if hand_idx in self.pinch_states:
                 del self.pinch_states[hand_idx]
         
+        # Clean up 3D grab states
+        hands_to_remove_3d = []
+        for hand_idx in self.grab_states_3d:
+            if hand_idx not in current_grabs_3d:
+                obj_3d = self.grab_states_3d[hand_idx]['object']
+                obj_3d.is_grabbed = False
+                obj_3d.grabbed_by_hand = None
+                hands_to_remove_3d.append(hand_idx)
+        
+        for hand_idx in hands_to_remove_3d:
+            del self.grab_states_3d[hand_idx]
+        
         # Additional safety: release objects if no hands are detected
         if not hands_info:
             for obj in self.objects:
                 if obj.is_grabbed:
                     obj.is_grabbed = False
                     obj.grabbed_by_hand = None
+            for obj_3d in self.objects_3d:
+                if obj_3d.is_grabbed:
+                    obj_3d.is_grabbed = False
+                    obj_3d.grabbed_by_hand = None
             self.grab_states.clear()
+            self.grab_states_3d.clear()
             self.pinch_states.clear()
     
     def _handle_pinch_interaction(self, hand_info: dict, hand_idx: int):
@@ -404,6 +573,87 @@ class ARHandController:
             target_size = grab_state['initial_size'] * scale_factor
             obj.size = obj.size * 0.8 + target_size * 0.2  # Smooth scaling
             obj.size = max(20, min(150, obj.size))  # Clamp size
+    
+    def _handle_pinch_interaction_3d(self, hand_info: dict, hand_idx: int) -> bool:
+        """Handle pinch gesture interaction with 3D objects"""
+        pinch_center = hand_info['pinch_center']
+        pinch_distance = hand_info['pinch_distance']
+        
+        if hand_idx not in self.grab_states_3d:
+            # Try to grab a 3D object
+            closest_obj_3d = None
+            closest_distance = float('inf')
+            
+            for obj_3d in self.objects_3d:
+                if not obj_3d.is_grabbed and obj_3d.is_point_inside(pinch_center[0], pinch_center[1], self.renderer_3d):
+                    # For 3D objects, we use a simpler distance check
+                    distance = 0  # If point is inside, it's the closest
+                    if distance < closest_distance:
+                        closest_distance = distance
+                        closest_obj_3d = obj_3d
+            
+            if closest_obj_3d:
+                closest_obj_3d.is_grabbed = True
+                closest_obj_3d.grabbed_by_hand = hand_idx
+                self.grab_states_3d[hand_idx] = {
+                    'object': closest_obj_3d,
+                    'initial_pinch_distance': pinch_distance,
+                    'initial_scale': closest_obj_3d.scale,
+                    'last_hand_pos': pinch_center
+                }
+                return True
+        else:
+            # Continue interaction with grabbed 3D object
+            grab_state = self.grab_states_3d[hand_idx]
+            obj_3d = grab_state['object']
+            
+            # Move object based on hand movement
+            last_pos = grab_state['last_hand_pos']
+            delta_x = pinch_center[0] - last_pos[0]
+            delta_y = pinch_center[1] - last_pos[1]
+            
+            # Convert screen movement to 3D world movement
+            obj_3d.move_to(pinch_center[0], pinch_center[1])
+            
+            # Scale object based on pinch distance change
+            initial_distance = grab_state['initial_pinch_distance']
+            scale_factor = pinch_distance / initial_distance if initial_distance > 0 else 1.0
+            obj_3d.scale_object(scale_factor)
+            
+            # Update last position
+            grab_state['last_hand_pos'] = pinch_center
+            return True
+        
+        return False
+    
+    def _handle_two_hand_rotation(self, hands_info: List[dict]):
+        """Handle two-hand rotation for 3D objects"""
+        if len(hands_info) < 2 or len(self.objects_3d) == 0:
+            return
+        
+        hand1 = hands_info[0]
+        hand2 = hands_info[1]
+        
+        # Only rotate if both hands are pinching
+        if hand1['is_pinching'] and hand2['is_pinching']:
+            # Calculate rotation based on hand positions
+            pos1 = hand1['pinch_center']
+            pos2 = hand2['pinch_center']
+            
+            # Calculate angle between hands
+            dx = pos2[0] - pos1[0]
+            dy = pos2[1] - pos1[1]
+            angle = math.atan2(dy, dx)
+            
+            # Apply rotation to the first 3D object (could be extended to all)
+            if self.objects_3d:
+                obj_3d = self.objects_3d[0]
+                # Disable auto-rotation when manually rotating
+                obj_3d.auto_rotate = False
+                
+                # Apply small rotation increments
+                rotation_speed = 0.02
+                obj_3d.rotate(0, rotation_speed, 0)  # Rotate around Y-axis
     
     def _add_random_object(self):
         """Add a new random object"""
@@ -469,6 +719,19 @@ class ARHandController:
             cv2.putText(frame, f"Distance: {int(pinch_distance)}", 
                        (palm_pos[0] - 30, palm_pos[1] + 15),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+        
+        # Show object counts and mode info
+        info_y = frame.shape[0] - 80
+        cv2.putText(frame, f"2D Objects: {len(self.objects)} {'(ON)' if self.show_2d_objects else '(OFF)'}", 
+                   (10, info_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        cv2.putText(frame, f"3D Objects: {len(self.objects_3d)} {'(ON)' if self.show_3d_objects else '(OFF)'}", 
+                   (10, info_y + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        
+        if self.objects_3d:
+            render_mode = self.objects_3d[0].render_mode
+            auto_rotate = self.objects_3d[0].auto_rotate
+            cv2.putText(frame, f"3D Mode: {render_mode} | Auto-rotate: {'ON' if auto_rotate else 'OFF'}", 
+                       (10, info_y + 40), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
         
         return frame
     
