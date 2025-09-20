@@ -1,6 +1,6 @@
-# AR Hand Control Application
+# AR Hand Control Application with Jarvis AI Assistant
 
-A real-time augmented reality application that allows you to manipulate both 2D and 3D virtual objects using hand gestures detected through your webcam.
+A real-time augmented reality application that allows you to manipulate both 2D and 3D virtual objects using hand gestures detected through your webcam. Now featuring **Jarvis**, an AI-powered voice assistant that can identify objects and answer questions about your AR scene.
 
 ## Features
 
@@ -12,6 +12,9 @@ A real-time augmented reality application that allows you to manipulate both 2D 
 - **Multiple Render Modes**: Wireframe, solid, and point cloud rendering for 3D objects
 - **Real-time Interaction**: Smooth, responsive gesture recognition
 - **Multi-hand Support**: Track up to 2 hands simultaneously
+- **🤖 Jarvis AI Assistant**: Voice-activated AI that can identify objects and answer questions
+- **🔍 Computer Vision**: AI-powered object recognition using Gemini Vision API
+- **🎤 Voice Control**: Natural language interaction with your AR environment
 
 ## Gestures
 
@@ -26,14 +29,34 @@ A real-time augmented reality application that allows you to manipulate both 2D 
 - **Single Hand on 3D Object**: Move and scale 3D models in 3D space
 - **Auto-Rotation**: 3D objects rotate automatically when not being manipulated
 
+### 🤖 Jarvis Voice Commands
+- **"What is this?"** (while pointing): Identify the object you're pointing at
+- **"Describe the scene"**: Get an overview of what's visible in the AR environment
+- **"Help"**: List available voice commands
+- **General questions**: Ask Jarvis anything about your work or the objects
+- **"Goodbye"**: Deactivate Jarvis
+
 ## Installation
 
+### Quick Setup
+```bash
+# Clone or download the project
+# Navigate to the project directory
+python setup_jarvis.py
+```
+
+### Manual Setup
 1. Install the required dependencies:
 ```bash
 pip install -r requirements.txt
 ```
 
-2. Make sure you have a working webcam connected to your computer.
+2. Set up your Gemini API key:
+   - Go to [Google AI Studio](https://makersuite.google.com/app/apikey)
+   - Create a new API key
+   - Copy `.env.example` to `.env` and add your key
+
+3. Make sure you have a working webcam and microphone connected to your computer.
 
 ## Usage
 
@@ -48,12 +71,15 @@ python main.py
 - **Q**: Quit the application
 - **R**: Reset all objects to initial positions
 - **C**: Add a new random 2D object to the scene
+- **🤖 J**: Activate/Deactivate Jarvis voice assistant
 
 #### 3D Controls
 - **1**: Toggle 2D objects on/off
 - **2**: Toggle 3D objects on/off
 - **W**: Toggle between wireframe and solid rendering for 3D objects
 - **T**: Toggle auto-rotation for 3D objects
+- **X/Y/Z**: Reset rotation on specific axis
+- **Space**: Cycle through 3D objects
 
 ### Tips
 

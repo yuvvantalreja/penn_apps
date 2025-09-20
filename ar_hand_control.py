@@ -7,6 +7,7 @@ import time
 import os
 from renderer_3d import Renderer3D
 from virtual_object_3d import VirtualObject3D
+from jarvis_assistant import JarvisAssistant
 
 class VirtualObject:
     """Represents a virtual object that can be manipulated in AR space"""
@@ -198,6 +199,7 @@ class ARHandController:
         self.objects_3d: List[VirtualObject3D] = []
         self.cap = None
         self.is_running = False
+        self.current_frame = None  # Store current frame for Jarvis
         
         # 3D Renderer
         self.renderer_3d = None
@@ -213,6 +215,10 @@ class ARHandController:
         # Display mode
         self.show_3d_objects = True
         self.show_2d_objects = True
+        
+        # Initialize Jarvis Assistant
+        self.jarvis = JarvisAssistant(self)
+        print("🤖 Jarvis Assistant initialized - Press 'J' to activate")
         
         # Create some initial objects
         self._create_initial_objects()
@@ -313,6 +319,7 @@ class ARHandController:
         print("- Press 't' to toggle auto-rotation")
         print("- Press 'x/y/z' to reset rotation on specific axis")
         print("- Press 'space' to cycle through 3D objects")
+        print("🤖 Press 'J' to activate/deactivate Jarvis voice assistant")
         
         while self.is_running:
             self._process_frame()
@@ -328,14 +335,18 @@ class ARHandController:
         # Flip frame horizontally for mirror effect
         frame = cv2.flip(frame, 1)
         
+        # Store current frame for Jarvis
+        self.current_frame = frame.copy()
+        
         # Detect hands
         hands_info = self.detector.detect_hands(frame)
         
+        # Store hands info for Jarvis and scaling calculations
+        self.detector.current_hands_info = hands_info
+        self.current_hands_info = hands_info
+        
         # Process interactions
         self._process_interactions(hands_info)
-        
-        # Store hands_info for scaling calculations
-        self.current_hands_info = hands_info
         
         # Draw 2D objects
         if self.show_2d_objects:
@@ -416,6 +427,14 @@ class ARHandController:
             for obj_3d in self.objects_3d:
                 obj_3d.rotation_z = 0.0
             print("Reset Z-axis rotation")
+        elif key == ord('j') or key == ord('J'):
+            # Activate/Deactivate Jarvis
+            if self.jarvis.is_active:
+                self.jarvis.deactivate_jarvis()
+                print("🤖 Jarvis deactivated")
+            else:
+                self.jarvis.activate_jarvis()
+                print("🤖 Jarvis activated - Listening for commands")
         elif key == ord(' '):  # Spacebar
             # Cycle through 3D objects (highlight next one)
             if self.objects_3d:
