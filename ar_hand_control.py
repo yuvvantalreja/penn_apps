@@ -23,23 +23,68 @@ class VirtualObject:
         self.z_depth = 0.0 
         
     def draw(self, frame: np.ndarray) -> np.ndarray:
-        """Draw the virtual object on the frame"""
+        """Draw the virtual object with Apple Vision Pro-inspired glassmorphism"""
         center = (int(self.x), int(self.y))
         radius = int(self.size)
         
         if self.shape == "circle":
-            for i in range(radius, 0, -2):
-                alpha = 0.8 * (i / radius)
-                color = tuple(int(c * alpha) for c in self.color)
-                cv2.circle(frame, center, i, color, -1)
-                
-            # Draw grab indicator based on grab state
+            # Create glassmorphism effect with multiple layers
+            self._draw_glass_object(frame, center, radius)
+            
+            # Draw interaction states with elegant indicators
             if self.is_grabbed == 1:
-                cv2.circle(frame, center, radius + 5, (255, 255, 255), 3)  # White ring for 1 hand
+                # Single hand grab - subtle pulsing ring
+                self._draw_interaction_ring(frame, center, radius + 8, (200, 220, 255), 2, "single")
             elif self.is_grabbed == 2:
-                cv2.circle(frame, center, radius + 5, (255, 255, 0), 5)  # Yellow ring for 2 hands
+                # Two hand grab - scaling mode indicator
+                self._draw_interaction_ring(frame, center, radius + 12, (255, 200, 120), 3, "dual")
                 
         return frame
+    
+    def _draw_glass_object(self, frame: np.ndarray, center: tuple, radius: int):
+        """Draw object with glassmorphism effect"""
+        # Base glass layer with transparency
+        overlay = frame.copy()
+        
+        # Outer glow
+        cv2.circle(overlay, center, radius + 3, self.color, -1)
+        cv2.addWeighted(overlay, 0.1, frame, 0.9, 0, frame)
+        
+        # Main glass body
+        overlay = frame.copy()
+        cv2.circle(overlay, center, radius, self.color, -1)
+        cv2.addWeighted(overlay, 0.3, frame, 0.7, 0, frame)
+        
+        # Inner highlight for depth
+        highlight_color = tuple(min(255, c + 80) for c in self.color)
+        cv2.circle(frame, (center[0] - radius//3, center[1] - radius//3), radius//3, highlight_color, -1)
+        overlay = frame.copy()
+        cv2.circle(overlay, (center[0] - radius//3, center[1] - radius//3), radius//3, (255, 255, 255), -1)
+        cv2.addWeighted(overlay, 0.2, frame, 0.8, 0, frame)
+        
+        # Subtle border
+        border_color = tuple(min(255, c + 40) for c in self.color)
+        cv2.circle(frame, center, radius, border_color, 1)
+    
+    def _draw_interaction_ring(self, frame: np.ndarray, center: tuple, radius: int, color: tuple, thickness: int, mode: str):
+        """Draw interaction ring with animation-like effects"""
+        # Main interaction ring
+        cv2.circle(frame, center, radius, color, thickness)
+        
+        if mode == "dual":
+            # Add scaling indicators for two-hand interaction
+            # Draw small directional indicators
+            import math
+            for angle in [0, 90, 180, 270]:
+                rad = math.radians(angle)
+                indicator_x = int(center[0] + (radius + 8) * math.cos(rad))
+                indicator_y = int(center[1] + (radius + 8) * math.sin(rad))
+                cv2.circle(frame, (indicator_x, indicator_y), 3, color, -1)
+                
+        # Add subtle glow effect
+        overlay = frame.copy()
+        cv2.circle(overlay, center, radius, color, thickness * 2)
+        cv2.addWeighted(overlay, 0.3, frame, 0.7, 0, frame)
     
     def is_point_inside(self, x: float, y: float) -> bool:
         """Check if a point is inside the object"""
@@ -181,11 +226,51 @@ class HandGestureDetector:
         return gestures
     
     def draw_landmarks(self, frame: np.ndarray, hands_info: List[dict]) -> np.ndarray:
-        """Draw hand landmarks on frame"""
+        """Draw minimal, elegant hand landmarks"""
         for hand_info in hands_info:
             if 'landmarks' in hand_info:
-                self.mp_drawing.draw_landmarks(
-                    frame, hand_info['landmarks'], self.mp_hands.HAND_CONNECTIONS)
+                # Only draw key landmarks with Apple Vision Pro styling
+                landmarks = hand_info['landmarks']
+                h, w = frame.shape[:2]
+                
+                # Key landmark indices for minimal visualization
+                key_landmarks = [0, 4, 8, 12, 16, 20]  # Wrist, thumb tip, index tip, middle tip, ring tip, pinky tip
+                
+                # Draw minimal landmarks
+                for idx in key_landmarks:
+                    if idx < len(landmarks.landmark):
+                        landmark = landmarks.landmark[idx]
+                        x = int(landmark.x * w)
+                        y = int(landmark.y * h)
+                        
+                        # Subtle landmark indicators
+                        if idx == 0:  # Wrist - slightly larger
+                            cv2.circle(frame, (x, y), 4, (150, 150, 150), 1)
+                            cv2.circle(frame, (x, y), 2, (200, 200, 200), -1)
+                        else:  # Fingertips - small dots
+                            cv2.circle(frame, (x, y), 2, (180, 180, 180), 1)
+                            cv2.circle(frame, (x, y), 1, (220, 220, 220), -1)
+                
+                # Draw minimal hand outline connections (only essential ones)
+                essential_connections = [
+                    (0, 5), (5, 9), (9, 13), (13, 17),  # Palm outline
+                    (0, 17)  # Close the palm
+                ]
+                
+                for connection in essential_connections:
+                    start_idx, end_idx = connection
+                    if start_idx < len(landmarks.landmark) and end_idx < len(landmarks.landmark):
+                        start_landmark = landmarks.landmark[start_idx]
+                        end_landmark = landmarks.landmark[end_idx]
+                        
+                        start_x = int(start_landmark.x * w)
+                        start_y = int(start_landmark.y * h)
+                        end_x = int(end_landmark.x * w)
+                        end_y = int(end_landmark.y * h)
+                        
+                        # Subtle connection lines
+                        cv2.line(frame, (start_x, start_y), (end_x, end_y), (120, 120, 120), 1)
+        
         return frame
 
 
@@ -424,7 +509,7 @@ class ARHandController:
                     obj_3d.selected = None  # Hide radius for objects beyond the first two
                 frame = obj_3d.draw(frame, self.renderer_3d)
                 
-                # Draw targeting indicator for 3D objects when pinching near them
+                # Draw elegant targeting indicator for 3D objects when pinching near them
                 for hand_info in hands_info:
                     if (hand_info['is_pinching'] and 
                         not obj_3d.is_grabbed and 
@@ -432,12 +517,7 @@ class ARHandController:
                         
                         screen_pos = obj_3d.get_screen_position(self.renderer_3d)
                         if screen_pos:
-                            # Draw targeting circle
-                            cv2.circle(frame, (int(screen_pos[0]), int(screen_pos[1])), 60, (255, 255, 0), 3)
-                            cv2.circle(frame, (int(screen_pos[0]), int(screen_pos[1])), 40, (255, 255, 0), 2)
-                            
-                            # Draw line from pinch center to object center
-                            cv2.line(frame, hand_info['pinch_center'], (int(screen_pos[0]), int(screen_pos[1])), (255, 255, 0), 2)
+                            self._draw_elegant_targeting_indicator(frame, screen_pos, hand_info['pinch_center'])
             
         # Draw hand landmarks
         frame = self.detector.draw_landmarks(frame, hands_info)
@@ -1119,135 +1199,328 @@ class ARHandController:
         self.objects.append(VirtualObject(x, y, size, color, shape))
     
     def _draw_ui(self, frame: np.ndarray, hands_info: List[dict]) -> np.ndarray:
-        """Draw user interface elements"""
-        # Draw instructions
-        instructions = [
-            "AR Hand Control - Pinch to grab, move, and scale objects",
-            "Two hands required for scaling - move apart/closer to scale",
-            "Q: Quit | R: Reset | C: Add Object",
-            f"Objects: {len(self.objects)} | Hands: {len(hands_info)}"
-        ]
+        """Draw Apple Vision Pro-inspired user interface elements"""
+        h, w = frame.shape[:2]
         
-        for i, instruction in enumerate(instructions):
-            y_pos = 30 + i * 25
-            cv2.putText(frame, instruction, (10, y_pos), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        # Apple Vision Pro inspired color palette
+        vision_blue = (255, 200, 120)      # Light blue accent (BGR)
+        vision_silver = (200, 200, 200)    # Silver/white text
+        vision_glass = (80, 80, 80)        # Glass overlay base
+        vision_accent = (255, 150, 0)      # Orange/blue accent
         
-        # Draw hand status with pinch feedback
+        # Draw minimal header with glassmorphism effect
+        self._draw_glass_panel(frame, (20, 15), (w - 40, 45), alpha=0.15)
+        
+        # Elegant title with modern typography feel
+        title = "AR SPATIAL CONTROL"
+        title_size = cv2.getTextSize(title, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)[0]
+        title_x = (w - title_size[0]) // 2
+        cv2.putText(frame, title, (title_x, 40), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, vision_silver, 2)
+        
+        # Subtle gesture hint
+        hint = f"Pinch gestures • {len(hands_info)} hands detected"
+        hint_size = cv2.getTextSize(hint, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)[0]
+        hint_x = (w - hint_size[0]) // 2
+        cv2.putText(frame, hint, (hint_x, 55), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.4, (150, 150, 150), 1)
+        
+        # Draw floating status panel (bottom)
+        self._draw_floating_status_panel(frame, hands_info)
+        
+        # Draw hand interaction indicators with elegance
+        self._draw_elegant_hand_indicators(frame, hands_info)
+        
+        # Draw object count indicators in corners
+        self._draw_corner_indicators(frame)
+        
+        return frame
+    
+    def _draw_glass_panel(self, frame: np.ndarray, top_left: tuple, size: tuple, alpha: float = 0.1):
+        """Draw a glassmorphism-style panel"""
+        x, y = top_left
+        w, h = size
+        
+        # Create glass overlay
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (x, y), (x + w, y + h), (40, 40, 40), -1)
+        
+        # Apply glass effect with subtle border
+        cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
+        cv2.rectangle(frame, (x, y), (x + w, y + h), (100, 100, 100), 1)
+    
+    def _draw_floating_status_panel(self, frame: np.ndarray, hands_info: List[dict]):
+        """Draw a floating status panel at the bottom"""
+        h, w = frame.shape[:2]
+        panel_w = 400
+        panel_h = 60
+        panel_x = (w - panel_w) // 2
+        panel_y = h - panel_h - 20
+        
+        # Glass panel background
+        self._draw_glass_panel(frame, (panel_x, panel_y), (panel_w, panel_h), alpha=0.2)
+        
+        # Status information with clean typography
+        status_items = []
+        
+        # Object counts
+        obj_2d_status = f"2D: {len(self.objects)}" + (" ●" if self.show_2d_objects else " ○")
+        obj_3d_status = f"3D: {len(self.objects_3d)}" + (" ●" if self.show_3d_objects else " ○")
+        
+        # Render mode
+        render_mode = self.objects_3d[0].render_mode if self.objects_3d else "N/A"
+        
+        status_text = f"{obj_2d_status}  |  {obj_3d_status}  |  Mode: {render_mode}"
+        
+        # Center the status text
+        text_size = cv2.getTextSize(status_text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)[0]
+        text_x = panel_x + (panel_w - text_size[0]) // 2
+        text_y = panel_y + 25
+        
+        cv2.putText(frame, status_text, (text_x, text_y), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+        
+        # Quick controls hint
+        controls_hint = "Q: Quit  •  R: Reset  •  C: Add  •  Space: Select"
+        hint_size = cv2.getTextSize(controls_hint, cv2.FONT_HERSHEY_SIMPLEX, 0.35, 1)[0]
+        hint_x = panel_x + (panel_w - hint_size[0]) // 2
+        hint_y = panel_y + 45
+        
+        cv2.putText(frame, controls_hint, (hint_x, hint_y), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.35, (150, 150, 150), 1)
+    
+    def _draw_elegant_hand_indicators(self, frame: np.ndarray, hands_info: List[dict]):
+        """Draw elegant, minimal hand tracking indicators"""
         for hand_info in hands_info:
             hand_idx = hand_info['hand_idx']
             palm_pos = hand_info['palm_center']
             pinch_center = hand_info['pinch_center']
-            
-            # Draw palm center
-            cv2.circle(frame, palm_pos, 8, (0, 255, 0), -1)
-            
-            # Draw pinch center
-            cv2.circle(frame, pinch_center, 5, (255, 0, 255), -1)
-            
-            # Show pinch status with more detail
             is_pinching = hand_info['is_pinching']
+            
+            # Determine interaction state and colors
             stabilized_pinching = hand_idx in self.pinch_states and self.pinch_states[hand_idx]['was_pinching']
             
             if stabilized_pinching:
-                status = "PINCHING ✓"
-                color = (0, 255, 0)  # Green for successful pinch
-                if hand_idx in self.grab_states:
-                    obj = self.grab_states[hand_idx]['object']
-                    grab_state_text = ["Not grabbed", "1 hand", "2 hands"][obj.is_grabbed]
-                    scaling_text = " (SCALING)" if obj.is_grabbed == 2 else ""
-                    status = f"2D GRABBED ✓ ({grab_state_text}{scaling_text}, Size: {int(obj.size)})"
-                    color = (255, 255, 0)  # Yellow for grabbed 2D
-                elif hand_idx in self.grab_states_3d:
-                    obj_3d = self.grab_states_3d[hand_idx]['object']
-                    grab_state_text = ["Not grabbed", "1 hand", "2 hands"][obj_3d.is_grabbed]
-                    scaling_text = " (SCALING)" if obj_3d.is_grabbed == 2 else ""
-                    rotation_text = f" (ROTATING - Hand {obj_3d.rotation_hand_idx})" if obj_3d.is_in_rotation_mode else ""
-                    status = f"3D GRABBED ✓ ({grab_state_text}{scaling_text}{rotation_text}, Scale: {obj_3d.scale:.1f})"
-                    color = (0, 255, 255)  # Cyan for grabbed 3D
-            elif is_pinching:
-                status = "PINCHING..."
-                color = (0, 255, 255)  # Cyan for detecting
+                if hand_idx in self.grab_states_3d:
+                    # 3D object interaction - cyan theme
+                    primary_color = (255, 200, 100)  # Light cyan
+                    secondary_color = (200, 150, 50)  # Darker cyan
+                    status_text = "3D"
+                elif hand_idx in self.grab_states:
+                    # 2D object interaction - blue theme  
+                    primary_color = (255, 180, 120)  # Light blue
+                    secondary_color = (200, 140, 80)  # Darker blue
+                    status_text = "2D"
+                else:
+                    # Pinching but not grabbing
+                    primary_color = (180, 180, 180)  # Neutral
+                    secondary_color = (120, 120, 120)
+                    status_text = "PINCH"
             else:
-                status = "OPEN"
-                color = (128, 128, 128)  # Gray for open
+                # Hand detected but not pinching
+                primary_color = (100, 100, 100)  # Subtle gray
+                secondary_color = (60, 60, 60)
+                status_text = "READY"
             
-            cv2.putText(frame, f"Hand {hand_idx}: {status}", 
-                       (palm_pos[0] - 60, palm_pos[1] - 25),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+            # Draw elegant hand center indicator
+            cv2.circle(frame, palm_pos, 12, secondary_color, 2)
+            cv2.circle(frame, palm_pos, 6, primary_color, -1)
             
-            # Show pinch distance
-            pinch_distance = hand_info['pinch_distance']
-            cv2.putText(frame, f"Distance: {int(pinch_distance)}", 
-                       (palm_pos[0] - 30, palm_pos[1] + 15),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+            # Draw pinch point with connection line
+            if stabilized_pinching:
+                # Active pinch visualization
+                cv2.circle(frame, pinch_center, 8, primary_color, 2)
+                cv2.circle(frame, pinch_center, 3, (255, 255, 255), -1)
+                
+                # Connection line between palm and pinch
+                cv2.line(frame, palm_pos, pinch_center, primary_color, 1)
+            else:
+                # Subtle pinch point indicator
+                cv2.circle(frame, pinch_center, 4, secondary_color, 1)
+            
+            # Floating status label with glass background
+            label_w, label_h = 60, 25
+            label_x = palm_pos[0] - label_w // 2
+            label_y = palm_pos[1] - 35
+            
+            # Ensure label stays on screen
+            label_x = max(5, min(frame.shape[1] - label_w - 5, label_x))
+            label_y = max(25, min(frame.shape[0] - 5, label_y))
+            
+            # Glass background for label
+            self._draw_glass_panel(frame, (label_x, label_y - label_h), (label_w, label_h), alpha=0.3)
+            
+            # Status text
+            text_size = cv2.getTextSize(status_text, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)[0]
+            text_x = label_x + (label_w - text_size[0]) // 2
+            text_y = label_y - 8
+            
+            cv2.putText(frame, status_text, (text_x, text_y), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, primary_color, 1)
+    
+    def _draw_corner_indicators(self, frame: np.ndarray):
+        """Draw minimal corner indicators for system status"""
+        h, w = frame.shape[:2]
         
-        # Show object counts and mode info
-        info_y = frame.shape[0] - 80
-        cv2.putText(frame, f"2D Objects: {len(self.objects)} {'(ON)' if self.show_2d_objects else '(OFF)'}", 
-                   (10, info_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-        cv2.putText(frame, f"3D Objects: {len(self.objects_3d)} {'(ON)' if self.show_3d_objects else '(OFF)'}", 
-                   (10, info_y + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        # Top-right: JARVIS status
+        if hasattr(self, 'jarvis_activated') and self.jarvis_activated:
+            cv2.circle(frame, (w - 30, 30), 8, (100, 255, 100), 2)  # Green for active
+            cv2.circle(frame, (w - 30, 30), 4, (150, 255, 150), -1)
+            cv2.putText(frame, "J", (w - 34, 35), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 255, 200), 1)
+        else:
+            cv2.circle(frame, (w - 30, 30), 6, (100, 100, 100), 1)  # Subtle inactive
         
-        if self.objects_3d:
-            render_mode = self.objects_3d[0].render_mode
-            auto_rotate = self.objects_3d[0].auto_rotate
-            cv2.putText(frame, f"3D Mode: {render_mode} | Auto-rotate: {'ON' if auto_rotate else 'OFF'}", 
-                       (10, info_y + 40), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        # Top-left: Frame rate (if needed for debugging)
+        if hasattr(self, 'last_frame_time'):
+            current_time = time.time()
+            fps = 1.0 / (current_time - self.last_frame_time) if current_time != self.last_frame_time else 0
+            self.last_frame_time = current_time
+            
+            if fps > 20:  # Only show if performance is good
+                fps_text = f"{int(fps)}"
+                cv2.putText(frame, fps_text, (15, 30), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.4, (150, 150, 150), 1)
+    
+    def _draw_elegant_targeting_indicator(self, frame: np.ndarray, target_pos: tuple, pinch_pos: tuple):
+        """Draw Apple Vision Pro-inspired targeting indicator"""
+        target_x, target_y = int(target_pos[0]), int(target_pos[1])
+        pinch_x, pinch_y = pinch_pos
         
-        return frame
+        # Apple Vision Pro inspired targeting colors
+        primary_color = (255, 200, 120)  # Light blue (BGR)
+        secondary_color = (200, 150, 80)  # Darker blue
+        
+        # Outer targeting ring with glassmorphism
+        overlay = frame.copy()
+        cv2.circle(overlay, (target_x, target_y), 50, secondary_color, -1)
+        cv2.addWeighted(overlay, 0.1, frame, 0.9, 0, frame)
+        
+        # Main targeting rings
+        cv2.circle(frame, (target_x, target_y), 45, primary_color, 2)
+        cv2.circle(frame, (target_x, target_y), 30, primary_color, 1)
+        
+        # Center targeting dot
+        cv2.circle(frame, (target_x, target_y), 4, (255, 255, 255), -1)
+        cv2.circle(frame, (target_x, target_y), 2, primary_color, -1)
+        
+        # Elegant connection line with gradient effect
+        # Draw multiple lines with decreasing opacity for gradient effect
+        for i in range(3):
+            alpha = 0.7 - i * 0.2
+            line_color = tuple(int(c * alpha) for c in primary_color)
+            thickness = max(1, 2 - i)  # Ensure thickness is always >= 1
+            cv2.line(frame, (pinch_x, pinch_y), (target_x, target_y), line_color, thickness)
+        
+        # Add directional indicators
+        import math
+        distance = math.sqrt((target_x - pinch_x)**2 + (target_y - pinch_y)**2)
+        if distance > 10:  # Avoid division by zero
+            # Calculate direction vector
+            dir_x = (target_x - pinch_x) / distance
+            dir_y = (target_y - pinch_y) / distance
+            
+            # Draw small directional arrows along the line
+            for t in [0.3, 0.7]:
+                arrow_x = int(pinch_x + t * (target_x - pinch_x))
+                arrow_y = int(pinch_y + t * (target_y - pinch_y))
+                
+                # Arrow head points
+                arrow_size = 8
+                arrow_x1 = int(arrow_x - arrow_size * dir_x + arrow_size * 0.5 * dir_y)
+                arrow_y1 = int(arrow_y - arrow_size * dir_y - arrow_size * 0.5 * dir_x)
+                arrow_x2 = int(arrow_x - arrow_size * dir_x - arrow_size * 0.5 * dir_y)
+                arrow_y2 = int(arrow_y - arrow_size * dir_y + arrow_size * 0.5 * dir_x)
+                
+                cv2.line(frame, (arrow_x, arrow_y), (arrow_x1, arrow_y1), primary_color, 2)
+                cv2.line(frame, (arrow_x, arrow_y), (arrow_x2, arrow_y2), primary_color, 2)
     
     def _draw_rotation_hand_indicators(self, frame: np.ndarray, hands_info: List[dict]) -> np.ndarray:
-        """Draw visual indicators for hands controlling rotation"""
+        """Draw elegant Apple Vision Pro-inspired rotation indicators"""
         for obj_3d in self.objects_3d:
             if obj_3d.is_in_rotation_mode and obj_3d.rotation_hand_idx is not None:
                 # Find the rotation hand
                 rotation_hand_info = next((hand for hand in hands_info if hand['hand_idx'] == obj_3d.rotation_hand_idx), None)
                 
                 if rotation_hand_info:
-                    # Draw a large circle around the rotation hand
                     hand_center = rotation_hand_info['palm_center']
-                    cv2.circle(frame, hand_center, 30, (0, 255, 255), 3)  # Cyan circle
-                    cv2.circle(frame, hand_center, 25, (0, 255, 255), -1)  # Filled cyan circle
                     
-                    # Draw "ROTATOR" text above the hand
-                    text = "ROTATOR"
-                    font = cv2.FONT_HERSHEY_SIMPLEX
-                    font_scale = 0.6
-                    font_thickness = 2
-                    text_size = cv2.getTextSize(text, font, font_scale, font_thickness)[0]
-                    text_x = hand_center[0] - text_size[0] // 2
-                    text_y = hand_center[1] - 40
+                    # Apple Vision Pro inspired rotation colors
+                    rotation_color = (255, 200, 100)  # Light cyan (BGR)
+                    accent_color = (200, 150, 50)     # Darker variant
                     
-                    # Draw text background
-                    cv2.rectangle(frame, 
-                                (text_x - 5, text_y - text_size[1] - 5), 
-                                (text_x + text_size[0] + 5, text_y + 5), 
-                                (0, 0, 0), -1)
+                    # Draw elegant rotation indicator with glassmorphism
+                    # Outer glow
+                    overlay = frame.copy()
+                    cv2.circle(overlay, hand_center, 35, accent_color, -1)
+                    cv2.addWeighted(overlay, 0.15, frame, 0.85, 0, frame)
                     
-                    # Draw text
-                    cv2.putText(frame, text, (text_x, text_y), font, font_scale, (0, 255, 255), font_thickness)
+                    # Main rotation ring
+                    cv2.circle(frame, hand_center, 28, rotation_color, 3)
+                    cv2.circle(frame, hand_center, 20, rotation_color, 1)
                     
-                    # Draw arrow indicating rotation direction
-                    arrow_length = 20
-                    arrow_x = hand_center[0] + 50
-                    arrow_y = hand_center[1]
+                    # Central rotation symbol (circular arrows)
+                    import math
+                    # Draw circular rotation arrows
+                    for angle_offset in [0, 180]:  # Two arrows opposite each other
+                        start_angle = angle_offset
+                        end_angle = angle_offset + 120
+                        
+                        # Calculate arc points
+                        arc_radius = 15
+                        num_points = 20
+                        arc_points = []
+                        
+                        for i in range(num_points):
+                            angle = math.radians(start_angle + (end_angle - start_angle) * i / (num_points - 1))
+                            x = int(hand_center[0] + arc_radius * math.cos(angle))
+                            y = int(hand_center[1] + arc_radius * math.sin(angle))
+                            arc_points.append((x, y))
+                        
+                        # Draw arc
+                        for i in range(len(arc_points) - 1):
+                            cv2.line(frame, arc_points[i], arc_points[i + 1], rotation_color, 2)
+                        
+                        # Arrow head at the end
+                        if len(arc_points) >= 2:
+                            end_point = arc_points[-1]
+                            prev_point = arc_points[-2]
+                            
+                            # Calculate arrow head direction
+                            dx = end_point[0] - prev_point[0]
+                            dy = end_point[1] - prev_point[1]
+                            length = math.sqrt(dx*dx + dy*dy)
+                            
+                            if length > 0:
+                                dx /= length
+                                dy /= length
+                                
+                                # Arrow head points
+                                arrow_size = 6
+                                arrow_x1 = int(end_point[0] - arrow_size * dx + arrow_size * 0.5 * dy)
+                                arrow_y1 = int(end_point[1] - arrow_size * dy - arrow_size * 0.5 * dx)
+                                arrow_x2 = int(end_point[0] - arrow_size * dx - arrow_size * 0.5 * dy)
+                                arrow_y2 = int(end_point[1] - arrow_size * dy + arrow_size * 0.5 * dx)
+                                
+                                cv2.line(frame, end_point, (arrow_x1, arrow_y1), rotation_color, 2)
+                                cv2.line(frame, end_point, (arrow_x2, arrow_y2), rotation_color, 2)
                     
-                    # Draw left arrow (indicating left movement = clockwise)
-                    cv2.arrowedLine(frame, 
-                                  (arrow_x + arrow_length, arrow_y), 
-                                  (arrow_x, arrow_y), 
-                                  (0, 255, 255), 3, tipLength=0.3)
+                    # Elegant label with glass background
+                    label_text = "ROTATE"
+                    label_w, label_h = 80, 25
+                    label_x = hand_center[0] - label_w // 2
+                    label_y = hand_center[1] - 55
                     
-                    # Draw right arrow (indicating right movement = counter-clockwise)
-                    cv2.arrowedLine(frame, 
-                                  (arrow_x, arrow_y), 
-                                  (arrow_x + arrow_length, arrow_y), 
-                                  (0, 255, 255), 3, tipLength=0.3)
+                    # Glass background for label
+                    self._draw_glass_panel(frame, (label_x, label_y - label_h), (label_w, label_h), alpha=0.3)
                     
-                    # Add labels for arrows
-                    cv2.putText(frame, "CW", (arrow_x - 15, arrow_y - 10), font, 0.4, (0, 255, 255), 1)
-                    cv2.putText(frame, "CCW", (arrow_x + arrow_length - 5, arrow_y - 10), font, 0.4, (0, 255, 255), 1)
+                    # Label text
+                    text_size = cv2.getTextSize(label_text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)[0]
+                    text_x = label_x + (label_w - text_size[0]) // 2
+                    text_y = label_y - 8
+                    
+                    cv2.putText(frame, label_text, (text_x, text_y), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, rotation_color, 1)
         
         return frame
     
