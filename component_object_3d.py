@@ -2,15 +2,21 @@ import numpy as np
 import cv2
 import math
 from typing import Tuple, Optional
-from obj_loader import OBJLoader
+from multi_component_loader import ComponentData
 from renderer_3d import Renderer3D, Transform3D
 
-class VirtualObject3D:
-    """3D virtual object that can be manipulated in AR space"""
+
+class ComponentObject3D:
+    """3D virtual object representing a single CAD component that can be manipulated in AR space"""
     
-    def __init__(self, obj_path: str, x: float = 0, y: float = 0, z: float = 0, 
+    def __init__(self, component_data: ComponentData, assembly_name: str = "", 
+                 x: float = 0, y: float = 0, z: float = 0, 
                  scale: float = 1.0, color: Tuple[int, int, int] = (100, 150, 255)):
-        self.obj_path = obj_path
+        self.component_data = component_data
+        self.component_name = component_data.name
+        self.assembly_name = assembly_name
+        
+        # Position and transformation
         self.x = x
         self.y = y
         self.z = z
@@ -26,59 +32,39 @@ class VirtualObject3D:
         # Interaction state
         self.is_grabbed = 0  # 0 = not grabbed, 1 = grabbed with 1 hand, 2 = grabbed with 2 hands
         self.grabbed_by_hand = []  # List of hand indices that are grabbing this object
-        self.highlighted = False  # For object selection
-        self.selected = False  # Track selection state for highlighting
+        self.highlighted = False  # For object highlighting
+        self.selected = False  # Track selection state for UI highlighting
         
-        # Selection system for rotation
-        self.is_selected = False  # True when object is in selection mode for rotation
-        self.selection_hand_idx = None  # Hand index that selected this object
+        # Component-specific selection system
+        self.is_selected = False  # True when component is in selection mode for rotation
+        self.selection_hand_idx = None  # Hand index that selected this component
         self.last_selection_hand_pos = None  # Last position of the selecting hand
         
-        # Auto-rotation disabled by default - objects only rotate when pinched
+        # Auto-rotation disabled by default - components only rotate when manipulated
         self.auto_rotate = False
-        self.auto_rotation_speed = 0.02
+        self.auto_rotation_speed = 0.01
         
-        # Load 3D model
-        self.loader = OBJLoader()
-        self.vertices = np.array([])
-        self.faces = np.array([])
-        self.face_normals = np.array([])
+        # Pre-calculate geometry data
+        self.vertices = component_data.get_vertices_array()
+        self.faces = component_data.get_faces_array()
+        self.face_normals = component_data.calculate_face_normals()
         self.bounding_box_size = 1.0
         
         # Rendering mode
         self.render_mode = "solid"  # "wireframe", "solid", "points"
         
-        self.load_model()
-        
-    def load_model(self) -> bool:
-        """Load the 3D model from OBJ file"""
-        if not self.loader.load_obj(self.obj_path):
-            print(f"Failed to load 3D model: {self.obj_path}")
-            return False
-            
-        self.vertices = self.loader.get_vertices()
-        self.faces = self.loader.get_faces()
-        
-        # Calculate face normals if not provided
-        if len(self.loader.get_normals()) > 0:
-            self.face_normals = self.loader.get_normals()
-        else:
-            self.face_normals = self.loader.calculate_face_normals()
-        
-        # Normalize model to reasonable size
-        self.loader.normalize_model(target_size=2.0)
-        self.vertices = self.loader.get_vertices()
+        # Component visibility
+        self.visible = True
         
         # Calculate bounding box for collision detection
         if len(self.vertices) > 0:
-            min_bounds, max_bounds = self.loader.get_bounding_box()
+            min_bounds, max_bounds = component_data.get_bounding_box()
             self.bounding_box_size = np.max(max_bounds - min_bounds) * self.scale
         
-        print(f"Loaded 3D model: {len(self.vertices)} vertices, {len(self.faces)} faces")
-        return True
+        print(f"Created ComponentObject3D: '{self.component_name}' with {len(self.vertices)} vertices, {len(self.faces)} faces")
     
     def get_model_matrix(self) -> np.ndarray:
-        """Get the transformation matrix for this object"""
+        """Get the transformation matrix for this component"""
         # Create transformation matrices
         translation = Transform3D.translation_matrix(self.x, self.y, self.z)
         rotation_x = Transform3D.rotation_matrix_x(self.rotation_x)
@@ -92,11 +78,11 @@ class VirtualObject3D:
         return model_matrix
     
     def draw(self, frame: np.ndarray, renderer: Renderer3D) -> np.ndarray:
-        """Draw the 3D object on the frame"""
-        if len(self.vertices) == 0 or len(self.faces) == 0:
+        """Draw the component on the frame"""
+        if not self.visible or len(self.vertices) == 0 or len(self.faces) == 0:
             return frame
         
-        # Update auto-rotation
+        # Update auto-rotation if enabled
         if self.auto_rotate and not self.is_grabbed:
             self.rotation_y += self.auto_rotation_speed
             if self.rotation_y > 2 * math.pi:
@@ -107,11 +93,11 @@ class VirtualObject3D:
         
         # Choose color based on state
         if self.is_selected:
-            color = (255, 255, 0)  # Bright yellow when selected for rotation
+            color = (0, 255, 255)  # Cyan when selected for rotation
         elif self.is_grabbed:
-            color = tuple(min(255, c + 80) for c in self.color)  # Brighter when grabbed
+            color = tuple(min(255, c + 100) for c in self.color)  # Much brighter when grabbed
         elif self.highlighted:
-            color = tuple(min(255, c + 40) for c in self.color)  # Slightly brighter when highlighted
+            color = tuple(min(255, c + 60) for c in self.color)  # Brighter when highlighted
         else:
             color = self.color
         
@@ -127,13 +113,17 @@ class VirtualObject3D:
         if self.is_grabbed:
             frame = self._draw_bounding_box(frame, renderer, model_matrix)
         
+        # Draw component name when highlighted or grabbed
+        if self.highlighted or self.is_grabbed:
+            frame = self._draw_component_label(frame, renderer)
+        
         # Draw pinchable radius highlighting
         frame = self._draw_pinchable_radius(frame, renderer)
         
         return frame
     
     def _draw_bounding_box(self, frame: np.ndarray, renderer: Renderer3D, model_matrix: np.ndarray) -> np.ndarray:
-        """Draw a bounding box around the object when grabbed"""
+        """Draw a bounding box around the component when grabbed"""
         # Create a simple cube for bounding box
         size = self.bounding_box_size * 0.6
         box_vertices = np.array([
@@ -160,39 +150,57 @@ class VirtualObject3D:
                 # Check bounds
                 if (0 <= start_point[0] < renderer.width and 0 <= start_point[1] < renderer.height and
                     0 <= end_point[0] < renderer.width and 0 <= end_point[1] < renderer.height):
-                    cv2.line(frame, start_point, end_point, (255, 255, 0), 2)
+                    cv2.line(frame, start_point, end_point, (0, 255, 255), 2)  # Cyan bounding box
+        
+        return frame
+    
+    def _draw_component_label(self, frame: np.ndarray, renderer: Renderer3D) -> np.ndarray:
+        """Draw component name label"""
+        screen_pos = self.get_screen_position(renderer)
+        if screen_pos:
+            x, y = int(screen_pos[0]), int(screen_pos[1])
+            
+            # Create label text
+            if self.assembly_name:
+                label = f"{self.assembly_name}::{self.component_name}"
+            else:
+                label = self.component_name
+            
+            # Draw background rectangle for better readability
+            text_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)[0]
+            bg_x1, bg_y1 = x - 5, y - text_size[1] - 10
+            bg_x2, bg_y2 = x + text_size[0] + 5, y + 5
+            
+            # Ensure background is within frame bounds
+            bg_x1 = max(0, bg_x1)
+            bg_y1 = max(0, bg_y1)
+            bg_x2 = min(frame.shape[1], bg_x2)
+            bg_y2 = min(frame.shape[0], bg_y2)
+            
+            # Draw semi-transparent background
+            overlay = frame.copy()
+            cv2.rectangle(overlay, (bg_x1, bg_y1), (bg_x2, bg_y2), (0, 0, 0), -1)
+            cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
+            
+            # Draw text
+            cv2.putText(frame, label, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
         
         return frame
     
     def _draw_pinchable_radius(self, frame: np.ndarray, renderer: Renderer3D) -> np.ndarray:
-        """Draw the pinchable radius highlighting around the object"""
-        # Only draw if this object should show the radius (controlled by selected state)
-        # selected=True means show yellow, selected=False means show blue, None means don't show
+        """Draw the pinchable radius highlighting around the component"""
+        # Only draw if this component should show the radius
         if not hasattr(self, 'selected') or self.selected is None:
             return frame
-            
-        # Calculate screen position directly without model matrix transformations
-        # This ensures the radius is always centered on the object's actual position
-        center_3d = np.array([[self.x, self.y, self.z, 1.0]])
         
-        # Use only view and projection matrices, not the model matrix
-        vp_matrix = renderer.projection_matrix @ renderer.view_matrix
-        projected_center = center_3d @ vp_matrix.T
-        
-        if projected_center[0, 3] <= 0:  # Behind camera
+        screen_pos = self.get_screen_position(renderer)
+        if not screen_pos:
             return frame
         
-        # Perspective divide
-        projected_center[:, :3] /= projected_center[:, 3:4]
+        center = (int(screen_pos[0]), int(screen_pos[1]))
         
-        # Convert to screen coordinates
-        screen_x = (projected_center[0, 0] + 1) * renderer.width / 2
-        screen_y = (1 - projected_center[0, 1]) * renderer.height / 2
-        
-        center = (int(screen_x), int(screen_y))
-        
-        # Calculate pinchable radius based on the same logic as is_point_inside
-        pinchable_radius = int(max(45, self.bounding_box_size * 65 * self.scale))
+        # Calculate pinchable radius
+        pinchable_radius = int(max(35, self.bounding_box_size * 50 * self.scale))
         
         # Choose color based on selection state
         if self.selected:
@@ -208,42 +216,29 @@ class VirtualObject3D:
         return frame
     
     def is_point_inside(self, x: float, y: float, renderer: Renderer3D) -> bool:
-        """Check if a 2D point is inside the projected 3D object"""
-        if len(self.vertices) == 0:
+        """Check if a 2D point is inside the projected component"""
+        if not self.visible or len(self.vertices) == 0:
             return False
         
-        # Project object center to screen space directly without model matrix transformations
-        center_3d = np.array([[self.x, self.y, self.z, 1.0]])
-        
-        # Use only view and projection matrices, not the model matrix
-        vp_matrix = renderer.projection_matrix @ renderer.view_matrix
-        projected_center = center_3d @ vp_matrix.T
-        
-        if projected_center[0, 3] <= 0:  # Behind camera
+        screen_pos = self.get_screen_position(renderer)
+        if not screen_pos:
             return False
         
-        # Perspective divide
-        projected_center[:, :3] /= projected_center[:, 3:4]
-        
-        # Convert to screen coordinates
-        screen_x = (projected_center[0, 0] + 1) * renderer.width / 2
-        screen_y = (1 - projected_center[0, 1]) * renderer.height / 2
-        
-        # Use scaled bounding box for hit detection (moderately increased for easier grabbing)
-        hit_radius = max(45, self.bounding_box_size * 65 * self.scale)  # Balanced grab area
-        distance = math.sqrt((x - screen_x) ** 2 + (y - screen_y) ** 2)
+        # Use scaled bounding box for hit detection
+        hit_radius = max(35, self.bounding_box_size * 50 * self.scale)
+        distance = math.sqrt((x - screen_pos[0]) ** 2 + (y - screen_pos[1]) ** 2)
         
         return distance <= hit_radius
     
     def get_screen_position(self, renderer: Renderer3D) -> Optional[Tuple[float, float]]:
-        """Get the screen position of the object's center"""
-        if len(self.vertices) == 0:
+        """Get the screen position of the component's center"""
+        if not self.visible or len(self.vertices) == 0:
             return None
         
-        # Project object center to screen space directly without model matrix transformations
+        # Project component center to screen space
         center_3d = np.array([[self.x, self.y, self.z, 1.0]])
         
-        # Use only view and projection matrices, not the model matrix
+        # Use only view and projection matrices
         vp_matrix = renderer.projection_matrix @ renderer.view_matrix
         projected_center = center_3d @ vp_matrix.T
         
@@ -260,12 +255,8 @@ class VirtualObject3D:
         return (screen_x, screen_y)
     
     def move_to(self, x: float, y: float, z: Optional[float] = None):
-        """Move the object to a new position"""
+        """Move the component to a new position"""
         # Convert 2D screen coordinates to 3D world coordinates
-        # This is a simplified approach - in practice you'd want proper ray casting
-        
-        # For now, we'll map screen coordinates to world coordinates
-        # assuming a fixed Z plane
         world_x = (x - 640) / 200.0  # Adjust scaling as needed
         world_y = -(y - 360) / 200.0  # Flip Y and adjust scaling
         
@@ -275,12 +266,14 @@ class VirtualObject3D:
             self.z = z
     
     def scale_object(self, scale_factor: float):
-        """Scale the object"""
+        """Scale the component"""
         self.scale = max(0.1, min(5.0, self.original_scale * scale_factor))
-        self.bounding_box_size = np.max(self.loader.get_bounding_box()[1] - self.loader.get_bounding_box()[0]) * self.scale
+        # Update bounding box
+        min_bounds, max_bounds = self.component_data.get_bounding_box()
+        self.bounding_box_size = np.max(max_bounds - min_bounds) * self.scale
     
     def rotate(self, delta_x: float, delta_y: float, delta_z: float = 0.0):
-        """Rotate the object"""
+        """Rotate the component"""
         self.rotation_x += delta_x
         self.rotation_y += delta_y
         self.rotation_z += delta_z
@@ -304,3 +297,11 @@ class VirtualObject3D:
         self.rotation_x = 0.0
         self.rotation_y = 0.0
         self.rotation_z = 0.0
+    
+    def set_visibility(self, visible: bool):
+        """Set component visibility"""
+        self.visible = visible
+    
+    def get_info_string(self) -> str:
+        """Get a string with component information"""
+        return f"{self.component_name} ({len(self.vertices)} verts, {len(self.faces)} faces)"
