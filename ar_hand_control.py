@@ -310,15 +310,14 @@ class ARHandController:
             
             pinch_state = self.pinch_states[hand_idx]
             
-            # Reduced hysteresis: require 1 frame to start, 2 frames to stop
+            # Minimal hysteresis: require 1 frame to start, 1 frame to stop
             if is_pinching:
                 pinch_state['pinch_frames'] += 1
                 if pinch_state['pinch_frames'] >= 1:  # Start pinching after 1 frame
                     pinch_state['was_pinching'] = True
             else:
-                pinch_state['pinch_frames'] = max(0, pinch_state['pinch_frames'] - 1)
-                if pinch_state['pinch_frames'] == 0:  # Stop pinching after 2 frames
-                    pinch_state['was_pinching'] = False
+                pinch_state['pinch_frames'] = 0  # Immediately reset when not pinching
+                pinch_state['was_pinching'] = False  # Immediately stop pinching
             
             # Use the stabilized pinch state
             stabilized_pinching = pinch_state['was_pinching']
@@ -348,6 +347,15 @@ class ARHandController:
             # Also clean up pinch state
             if hand_idx in self.pinch_states:
                 del self.pinch_states[hand_idx]
+        
+        # Additional safety: release objects if no hands are detected
+        if not hands_info:
+            for obj in self.objects:
+                if obj.is_grabbed:
+                    obj.is_grabbed = False
+                    obj.grabbed_by_hand = None
+            self.grab_states.clear()
+            self.pinch_states.clear()
     
     def _handle_pinch_interaction(self, hand_info: dict, hand_idx: int):
         """Handle pinch gesture interaction with improved tracking"""
