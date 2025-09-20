@@ -34,6 +34,11 @@ class VirtualObject3D:
         self.selection_hand_idx = None  # Hand index that selected this object
         self.last_selection_hand_pos = None  # Last position of the selecting hand
         
+        # Explicit rotation state tracking
+        self.is_in_rotation_mode = False  # True when object is in rotation mode (1 hand grabbing)
+        self.rotation_hand_idx = None  # Hand index that is controlling rotation (the open hand)
+        self.last_rotation_hand_pos = None  # Last position of the rotation hand
+        
         # Auto-rotation disabled by default - objects only rotate when pinched
         self.auto_rotate = False
         self.auto_rotation_speed = 0.02
@@ -106,7 +111,9 @@ class VirtualObject3D:
         model_matrix = self.get_model_matrix()
         
         # Choose color based on state
-        if self.is_selected:
+        if self.is_in_rotation_mode:
+            color = (0, 255, 255)  # Cyan when in rotation mode
+        elif self.is_selected:
             color = (255, 255, 0)  # Bright yellow when selected for rotation
         elif self.is_grabbed:
             color = tuple(min(255, c + 80) for c in self.color)  # Brighter when grabbed

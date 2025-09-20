@@ -210,8 +210,11 @@ class ARHandController:
         # Pinch state tracking for hysteresis
         self.pinch_states = {}  # hand_idx -> {'was_pinching': bool, 'pinch_frames': int}
         
-        # Selection system tracking
-        self.selection_states = {}  # hand_idx -> {'pinch_count': int, 'last_pinch_time': float, 'target_object': VirtualObject3D}
+        # Selection system tracking (two-hand selection)
+        self.selection_mode_objects = set()  # Set of objects currently in selection mode (grabbed by 2 hands)
+        
+        # Explicit rotation mode tracking (simplified)
+        # No longer needed - using explicit rotation state in VirtualObject3D
         
         # Display mode
         self.show_3d_objects = True
@@ -244,7 +247,7 @@ class ARHandController:
             {
                 "path": "ironman_simple.obj",
                 "name": "Iron Man",
-                "position": (0.0, 0.0, -1.0),
+                "position": (3.0, 0.0, -2.0),
                 "scale": 0.7,
                 "color": (100, 150, 255)
             },
@@ -384,6 +387,9 @@ class ARHandController:
         # Draw UI
         frame = self._draw_ui(frame, hands_info)
         
+        # Draw rotation hand indicators
+        frame = self._draw_rotation_hand_indicators(frame, hands_info)
+        
         # Show frame
         cv2.imshow('AR Hand Control', frame)
         
@@ -509,9 +515,6 @@ class ARHandController:
                     self._handle_pinch_interaction(hand_info, hand_idx)
                     current_grabs.add(hand_idx)
             
-            # Always handle selection system for 3D objects
-            if self.show_3d_objects:
-                self._handle_selection_system_3d(hand_info, hand_idx)
             else:
                 # Release any grabbed 2D object
                 if hand_idx in self.grab_states:
@@ -541,14 +544,65 @@ class ARHandController:
                 # Release any grabbed 3D object
                 if hand_idx in self.grab_states_3d:
                     obj_3d = self.grab_states_3d[hand_idx]['object']
+                    grab_state = self.grab_states_3d[hand_idx]
+                    
+                    # Check if this release would create a rotation mode opportunity
+                    # (transitioning from 2-hand to 1-hand grab)
+                    if obj_3d.is_grabbed == 2 and len(obj_3d.grabbed_by_hand) == 2:
+                        # This is a 2-hand grab, check if we should enter rotation mode
+                        other_hand_idx = None
+                        for other_hand in obj_3d.grabbed_by_hand:
+                            if other_hand != hand_idx:
+                                other_hand_idx = other_hand
+                                break
+                        
+                        if other_hand_idx is not None:
+                            # Check if the other hand is still pinching
+                            other_hand_pinching = any(hand['hand_idx'] == other_hand_idx and hand['is_pinching'] for hand in hands_info)
+                            
+                            if other_hand_pinching:
+                                # Other hand is still pinching - enter rotation mode with released hand
+                                obj_3d.is_in_rotation_mode = True
+                                obj_3d.rotation_hand_idx = hand_idx
+                                
+                                # Get initial position of rotation hand
+                                rotation_hand_info = next((hand for hand in hands_info if hand['hand_idx'] == hand_idx), None)
+                                if rotation_hand_info:
+                                    obj_3d.last_rotation_hand_pos = rotation_hand_info['palm_center']
+                                
+                                print(f"Object entered rotation mode - Hand {hand_idx} controlling rotation")
+                                
+                                # Remove this hand from grabbed_by_hand but keep it in grab_states_3d for rotation tracking
+                                if hand_idx in obj_3d.grabbed_by_hand:
+                                    obj_3d.grabbed_by_hand.remove(hand_idx)
+                                obj_3d.is_grabbed = len(obj_3d.grabbed_by_hand)
+                                
+                                # Clear scaling state
+                                if 'initial_two_hand_distance' in grab_state:
+                                    del grab_state['initial_two_hand_distance']
+                                if 'initial_scale' in grab_state:
+                                    del grab_state['initial_scale']
+                                
+                                # Don't delete from grab_states_3d - keep for rotation tracking
+                                continue
+                    
+                    # Normal release logic (not transitioning to rotation mode)
                     # Remove this hand from the grabbed_by_hand list
                     if hand_idx in obj_3d.grabbed_by_hand:
                         obj_3d.grabbed_by_hand.remove(hand_idx)
                     # Update grab state based on remaining hands
                     obj_3d.is_grabbed = len(obj_3d.grabbed_by_hand)
+                    
+                    # Handle rotation mode exit if this hand was controlling rotation
+                    if obj_3d.is_in_rotation_mode and obj_3d.rotation_hand_idx == hand_idx:
+                        self._exit_rotation_mode(obj_3d)
+                    
                     # Deselect object when completely released
                     if obj_3d.is_grabbed == 0:
                         obj_3d.selected = False
+                        obj_3d.is_in_rotation_mode = False
+                        obj_3d.rotation_hand_idx = None
+                        obj_3d.last_rotation_hand_pos = None
                     
                     # Reset scaling state if transitioning from two-hand to one-hand or no hands
                     if obj_3d.is_grabbed < 2:
@@ -561,7 +615,9 @@ class ARHandController:
                                 if 'initial_scale' in other_hand_state:
                                     del other_hand_state['initial_scale']
                     
-                    del self.grab_states_3d[hand_idx]
+                    # Only delete if the hand is still in grab_states_3d (might have been removed by rotation mode logic)
+                    if hand_idx in self.grab_states_3d:
+                        del self.grab_states_3d[hand_idx]
         
         
         # Clean up grab states for hands that are no longer detected
@@ -621,22 +677,22 @@ class ARHandController:
         for hand_idx in hands_to_remove_3d:
             del self.grab_states_3d[hand_idx]
         
-        # Clean up selection states for hands that are no longer detected
-        current_hand_indices = {hand_info['hand_idx'] for hand_info in hands_info}
-        selection_hands_to_remove = []
-        for hand_idx in self.selection_states:
-            if hand_idx not in current_hand_indices:
-                # Deselect any objects selected by this hand
-                for obj_3d in self.objects_3d:
-                    if obj_3d.is_selected and obj_3d.selection_hand_idx == hand_idx:
-                        obj_3d.is_selected = False
-                        obj_3d.selection_hand_idx = None
-                        obj_3d.last_selection_hand_pos = None
-                        print(f"Deselected 3D object (hand {hand_idx} no longer detected)")
-                selection_hands_to_remove.append(hand_idx)
+        # Handle selection mode interactions for 3D objects
+        if self.show_3d_objects:
+            self._handle_selection_mode_3d(hands_info)
         
-        for hand_idx in selection_hands_to_remove:
-            del self.selection_states[hand_idx]
+        # Clean up rotation mode for objects that are no longer grabbed
+        for obj_3d in self.objects_3d:
+            if obj_3d.is_in_rotation_mode and obj_3d.is_grabbed == 0:
+                self._exit_rotation_mode(obj_3d)
+        
+        # Clean up rotation mode for hands that are no longer detected
+        for obj_3d in self.objects_3d:
+            if obj_3d.is_in_rotation_mode and obj_3d.rotation_hand_idx is not None:
+                # Check if rotation hand is still detected
+                rotation_hand_detected = any(hand['hand_idx'] == obj_3d.rotation_hand_idx for hand in hands_info)
+                if not rotation_hand_detected:
+                    self._exit_rotation_mode(obj_3d)
         
         # Additional safety: release objects if no hands are detected
         if not hands_info:
@@ -745,158 +801,147 @@ class ARHandController:
                     obj.size = obj.size * 0.7 + target_size * 0.3  # Smooth scaling
                     obj.size = max(20, min(200, obj.size))  # Clamp size
     
-    def _handle_two_hand_interactions_3d(self, obj_3d):
-        """Handle two-hand interactions: scaling and rotation for 3D objects"""
-        # Get the two hands that are grabbing this object
+    
+    def _handle_selection_mode_3d(self, hands_info: List[dict]):
+        """Handle selection mode interactions for 3D objects (two-hand selection)"""
+        # Update selection mode objects based on current grab states
+        self._update_selection_mode_objects()
+        
+        # Handle interactions for objects in selection mode
+        for obj_3d in self.selection_mode_objects:
+            self._handle_selection_mode_interactions(obj_3d, hands_info)
+        
+        # Handle rotation mode for objects that transitioned from 2-hand to 1-hand grabbing
+        self._handle_rotation_mode_3d(hands_info)
+    
+    def _update_selection_mode_objects(self):
+        """Update which objects are in selection mode (grabbed by exactly 2 hands)"""
+        # Clear current selection mode
+        self.selection_mode_objects.clear()
+        
+        # Add objects that are grabbed by exactly 2 hands
+        for obj_3d in self.objects_3d:
+            if obj_3d.is_grabbed == 2:
+                self.selection_mode_objects.add(obj_3d)
+                obj_3d.is_selected = True  # Mark as selected for visual feedback
+            else:
+                obj_3d.is_selected = False  # Clear selection state
+    
+    def _handle_selection_mode_interactions(self, obj_3d, hands_info: List[dict]):
+        """Handle scaling for objects in selection mode (2 hands grabbing)"""
+        # Get the two hands that are currently grabbing this object
         grabbing_hands = [hand_idx for hand_idx in obj_3d.grabbed_by_hand if hand_idx in self.grab_states_3d]
         
         if len(grabbing_hands) == 2:
             hand1_idx, hand2_idx = grabbing_hands[0], grabbing_hands[1]
+            
+            # Check if both hands are still pinching (scaling mode)
+            hand1_pinching = any(hand['hand_idx'] == hand1_idx and hand['is_pinching'] for hand in hands_info)
+            hand2_pinching = any(hand['hand_idx'] == hand2_idx and hand['is_pinching'] for hand in hands_info)
+            
+            if hand1_pinching and hand2_pinching:
+                # Both hands pinching - scaling mode
+                self._handle_selection_scaling(obj_3d, hand1_idx, hand2_idx, hands_info)
+            elif hand1_pinching or hand2_pinching:
+                # One hand released - transition to rotation mode
+                self._transition_to_rotation_mode(obj_3d, hand1_idx, hand2_idx, hands_info)
+    
+    def _handle_selection_scaling(self, obj_3d, hand1_idx: int, hand2_idx: int, hands_info: List[dict]):
+        """Handle scaling when both hands are pinching in selection mode"""
+        # Get hand positions
+        hand1_info = next((hand for hand in hands_info if hand['hand_idx'] == hand1_idx), None)
+        hand2_info = next((hand for hand in hands_info if hand['hand_idx'] == hand2_idx), None)
+        
+        if hand1_info and hand2_info:
+            # Calculate current distance between the two hands
+            hand1_pos = hand1_info['pinch_center']
+            hand2_pos = hand2_info['pinch_center']
+            current_distance = math.sqrt((hand2_pos[0] - hand1_pos[0]) ** 2 + (hand2_pos[1] - hand1_pos[1]) ** 2)
+            
+            # Get initial distance when two-hand grab started
             hand1_state = self.grab_states_3d[hand1_idx]
-            hand2_state = self.grab_states_3d[hand2_idx]
+            if 'initial_two_hand_distance' not in hand1_state:
+                hand1_state['initial_two_hand_distance'] = current_distance
+                hand1_state['initial_scale'] = obj_3d.scale
             
-            # Get current hand positions from the detector
-            hand1_info = None
-            hand2_info = None
+            initial_distance = hand1_state['initial_two_hand_distance']
             
-            for hand_info in self.current_hands_info:
-                if hand_info['hand_idx'] == hand1_idx:
-                    hand1_info = hand_info
-                elif hand_info['hand_idx'] == hand2_idx:
-                    hand2_info = hand_info
-            
-            if hand1_info and hand2_info:
-                # Calculate current distance and angle between the two hands
-                hand1_pos = hand1_info['pinch_center']
-                hand2_pos = hand2_info['pinch_center']
-                current_distance = math.sqrt((hand2_pos[0] - hand1_pos[0]) ** 2 + (hand2_pos[1] - hand1_pos[1]) ** 2)
-                current_angle = math.atan2(hand2_pos[1] - hand1_pos[1], hand2_pos[0] - hand1_pos[0])
+            # Calculate scale factor based on distance change
+            if initial_distance > 0:
+                scale_factor = current_distance / initial_distance
+                target_scale = hand1_state['initial_scale'] * scale_factor
                 
-                # Initialize tracking variables if not present
-                if 'initial_two_hand_distance' not in hand1_state:
-                    hand1_state['initial_two_hand_distance'] = current_distance
-                    hand1_state['initial_scale'] = obj_3d.scale
-                    hand1_state['initial_angle'] = current_angle
-                    hand1_state['initial_rotation'] = (obj_3d.rotation_x, obj_3d.rotation_y, obj_3d.rotation_z)
-                    hand2_state['initial_two_hand_distance'] = current_distance
-                    hand2_state['initial_scale'] = obj_3d.scale
-                    hand2_state['initial_angle'] = current_angle
-                    hand2_state['initial_rotation'] = (obj_3d.rotation_x, obj_3d.rotation_y, obj_3d.rotation_z)
-                
-                initial_distance = hand1_state['initial_two_hand_distance']
-                initial_angle = hand1_state['initial_angle']
-                
-                # Calculate distance change and angle change
-                distance_change = abs(current_distance - initial_distance)
-                angle_change = abs(current_angle - initial_angle)
-                
-                # Determine if this is primarily a scaling or rotation gesture
-                # If distance change is significant, it's scaling
-                # If angle change is significant but distance change is small, it's rotation
-                scaling_threshold = 20.0  # pixels
-                rotation_threshold = 0.1  # radians
-                
-                if distance_change > scaling_threshold:
-                    # This is a scaling gesture
-                    if initial_distance > 0:
-                        scale_factor = current_distance / initial_distance
-                        target_scale = hand1_state['initial_scale'] * scale_factor
-                        
-                        # Apply scaling with smoothing
-                        obj_3d.scale = obj_3d.scale * 0.7 + target_scale * 0.3  # Smooth scaling
-                        obj_3d.scale = max(0.1, min(5.0, obj_3d.scale))  # Clamp scale
+                # Apply scaling with smoothing
+                obj_3d.scale = obj_3d.scale * 0.7 + target_scale * 0.3  # Smooth scaling
+                obj_3d.scale = max(0.1, min(5.0, obj_3d.scale))  # Clamp scale
     
-    def _handle_selection_system_3d(self, hand_info: dict, hand_idx: int):
-        """Handle the selection system for 3D objects (pinch-release-pinch to select)"""
-        pinch_center = hand_info['pinch_center']
-        is_pinching = hand_info['is_pinching']
-        current_time = time.time()
-        
-        # Initialize selection state for this hand if not exists
-        if hand_idx not in self.selection_states:
-            self.selection_states[hand_idx] = {
-                'pinch_count': 0,
-                'last_pinch_time': 0,
-                'target_object': None
-            }
-        
-        selection_state = self.selection_states[hand_idx]
-        
-        # Check for pinch-release-pinch pattern
-        if is_pinching:
-            # Find the closest 3D object to this hand
-            closest_obj_3d = None
-            closest_distance = float('inf')
-            
-            for obj_3d in self.objects_3d:
-                if obj_3d.is_point_inside(pinch_center[0], pinch_center[1], self.renderer_3d):
-                    distance = math.sqrt((pinch_center[0] - obj_3d.x) ** 2 + (pinch_center[1] - obj_3d.y) ** 2)
-                    if distance < closest_distance:
-                        closest_distance = distance
-                        closest_obj_3d = obj_3d
-            
-            # If we found an object and it's the same as before, increment pinch count
-            if closest_obj_3d and closest_obj_3d == selection_state['target_object']:
-                # Check if this is a new pinch (not continuous)
-                if current_time - selection_state['last_pinch_time'] > 0.5:  # 0.5 second gap
-                    selection_state['pinch_count'] += 1
-                    selection_state['last_pinch_time'] = current_time
-                    
-                    # If we've done pinch-release-pinch (2 pinches), select the object
-                    if selection_state['pinch_count'] >= 2:
-                        self._select_object_3d(closest_obj_3d, hand_idx)
-                        selection_state['pinch_count'] = 0  # Reset for next selection
-            else:
-                # New object or no object, reset
-                selection_state['target_object'] = closest_obj_3d
-                selection_state['pinch_count'] = 1
-                selection_state['last_pinch_time'] = current_time
-        
-        # Handle rotation for selected objects
-        if hand_idx in self.selection_states:
-            self._handle_selection_rotation_3d(hand_info, hand_idx)
     
-    def _select_object_3d(self, obj_3d, hand_idx: int):
-        """Select a 3D object for rotation"""
-        # Deselect all other objects first
-        for other_obj in self.objects_3d:
-            if other_obj != obj_3d:
-                other_obj.is_selected = False
-                other_obj.selection_hand_idx = None
-                other_obj.last_selection_hand_pos = None
+    def _transition_to_rotation_mode(self, obj_3d, hand1_idx: int, hand2_idx: int, hands_info: List[dict]):
+        """Transition object to rotation mode when one hand releases from 2-hand grab"""
+        # Determine which hand is still pinching and which is released
+        hand1_pinching = any(hand['hand_idx'] == hand1_idx and hand['is_pinching'] for hand in hands_info)
+        hand2_pinching = any(hand['hand_idx'] == hand2_idx and hand['is_pinching'] for hand in hands_info)
         
-        # Select this object
-        obj_3d.is_selected = True
-        obj_3d.selection_hand_idx = hand_idx
-        obj_3d.last_selection_hand_pos = None  # Will be set on first movement
-        print(f"Selected 3D object for rotation with hand {hand_idx}")
+        if hand1_pinching and not hand2_pinching:
+            # Hand1 still pinching, Hand2 released - Hand2 controls rotation
+            rotation_hand = hand2_idx
+        elif hand2_pinching and not hand1_pinching:
+            # Hand2 still pinching, Hand1 released - Hand1 controls rotation
+            rotation_hand = hand1_idx
+        else:
+            # Both hands released or both still pinching - no rotation mode
+            return
+        
+        # Set rotation mode
+        obj_3d.is_in_rotation_mode = True
+        obj_3d.rotation_hand_idx = rotation_hand
+        
+        # Get initial position of rotation hand
+        rotation_hand_info = next((hand for hand in hands_info if hand['hand_idx'] == rotation_hand), None)
+        if rotation_hand_info:
+            obj_3d.last_rotation_hand_pos = rotation_hand_info['palm_center']
+        
+        print(f"Object entered rotation mode - Hand {rotation_hand} controlling rotation")
     
-    def _handle_selection_rotation_3d(self, hand_info: dict, hand_idx: int):
-        """Handle rotation for selected 3D objects based on hand movement"""
-        # Find the object selected by this hand
-        selected_obj = None
+    def _handle_rotation_mode_3d(self, hands_info: List[dict]):
+        """Handle rotation mode for 3D objects"""
         for obj_3d in self.objects_3d:
-            if obj_3d.is_selected and obj_3d.selection_hand_idx == hand_idx:
-                selected_obj = obj_3d
-                break
-        
-        if selected_obj:
-            current_hand_pos = hand_info['pinch_center'] if hand_info['is_pinching'] else hand_info['palm_center']
-            
-            if selected_obj.last_selection_hand_pos is not None:
-                # Calculate horizontal movement
-                delta_x = current_hand_pos[0] - selected_obj.last_selection_hand_pos[0]
+            if obj_3d.is_in_rotation_mode and obj_3d.rotation_hand_idx is not None:
+                # Get current position of rotation hand
+                rotation_hand_info = next((hand for hand in hands_info if hand['hand_idx'] == obj_3d.rotation_hand_idx), None)
                 
-                # Apply rotation based on horizontal movement
-                if abs(delta_x) > 5:  # Minimum movement threshold
-                    rotation_sensitivity = 0.01  # Adjust for rotation speed
-                    selected_obj.rotation_y += delta_x * rotation_sensitivity
+                if rotation_hand_info and obj_3d.last_rotation_hand_pos is not None:
+                    current_pos = rotation_hand_info['palm_center']
+                    last_pos = obj_3d.last_rotation_hand_pos
                     
-                    # Keep rotation in reasonable range
-                    selected_obj.rotation_y = selected_obj.rotation_y % (2 * math.pi)
-            
-            # Update last position
-            selected_obj.last_selection_hand_pos = current_hand_pos
+                    # Calculate horizontal movement
+                    delta_x = current_pos[0] - last_pos[0]
+                    
+                    # Apply rotation based on horizontal movement
+                    if abs(delta_x) > 5:  # Minimum movement threshold
+                        rotation_sensitivity = 0.01  # Adjust for rotation speed
+                        # Invert rotation direction: left movement = clockwise, right movement = counter-clockwise
+                        obj_3d.rotation_y -= delta_x * rotation_sensitivity
+                        
+                        # Keep rotation in reasonable range
+                        obj_3d.rotation_y = obj_3d.rotation_y % (2 * math.pi)
+                    
+                    # Update last position
+                    obj_3d.last_rotation_hand_pos = current_pos
+                else:
+                    # Hand not detected or no last position - exit rotation mode
+                    self._exit_rotation_mode(obj_3d)
+    
+    def _exit_rotation_mode(self, obj_3d):
+        """Exit rotation mode for an object"""
+        # Clean up the rotation hand's grab state if it exists
+        if obj_3d.rotation_hand_idx is not None and obj_3d.rotation_hand_idx in self.grab_states_3d:
+            del self.grab_states_3d[obj_3d.rotation_hand_idx]
+        
+        obj_3d.is_in_rotation_mode = False
+        obj_3d.rotation_hand_idx = None
+        obj_3d.last_rotation_hand_pos = None
+        print(f"Object exited rotation mode")
                 
     
     def _handle_pinch_interaction_3d(self, hand_info: dict, hand_idx: int) -> bool:
@@ -970,9 +1015,6 @@ class ARHandController:
                 obj_3d.x += world_delta_x
                 obj_3d.y += world_delta_y
             
-            # Handle two-hand interactions (scaling and rotation)
-            if obj_3d.is_grabbed == 2:
-                self._handle_two_hand_interactions_3d(obj_3d)
             
             # Track finger positions for better interaction feedback
             grab_state['last_pinch_center'] = pinch_center
@@ -1039,7 +1081,8 @@ class ARHandController:
                     obj_3d = self.grab_states_3d[hand_idx]['object']
                     grab_state_text = ["Not grabbed", "1 hand", "2 hands"][obj_3d.is_grabbed]
                     scaling_text = " (SCALING)" if obj_3d.is_grabbed == 2 else ""
-                    status = f"3D GRABBED ✓ ({grab_state_text}{scaling_text}, Scale: {obj_3d.scale:.1f})"
+                    rotation_text = f" (ROTATING - Hand {obj_3d.rotation_hand_idx})" if obj_3d.is_in_rotation_mode else ""
+                    status = f"3D GRABBED ✓ ({grab_state_text}{scaling_text}{rotation_text}, Scale: {obj_3d.scale:.1f})"
                     color = (0, 255, 255)  # Cyan for grabbed 3D
             elif is_pinching:
                 status = "PINCHING..."
@@ -1070,6 +1113,60 @@ class ARHandController:
             auto_rotate = self.objects_3d[0].auto_rotate
             cv2.putText(frame, f"3D Mode: {render_mode} | Auto-rotate: {'ON' if auto_rotate else 'OFF'}", 
                        (10, info_y + 40), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        
+        return frame
+    
+    def _draw_rotation_hand_indicators(self, frame: np.ndarray, hands_info: List[dict]) -> np.ndarray:
+        """Draw visual indicators for hands controlling rotation"""
+        for obj_3d in self.objects_3d:
+            if obj_3d.is_in_rotation_mode and obj_3d.rotation_hand_idx is not None:
+                # Find the rotation hand
+                rotation_hand_info = next((hand for hand in hands_info if hand['hand_idx'] == obj_3d.rotation_hand_idx), None)
+                
+                if rotation_hand_info:
+                    # Draw a large circle around the rotation hand
+                    hand_center = rotation_hand_info['palm_center']
+                    cv2.circle(frame, hand_center, 30, (0, 255, 255), 3)  # Cyan circle
+                    cv2.circle(frame, hand_center, 25, (0, 255, 255), -1)  # Filled cyan circle
+                    
+                    # Draw "ROTATOR" text above the hand
+                    text = "ROTATOR"
+                    font = cv2.FONT_HERSHEY_SIMPLEX
+                    font_scale = 0.6
+                    font_thickness = 2
+                    text_size = cv2.getTextSize(text, font, font_scale, font_thickness)[0]
+                    text_x = hand_center[0] - text_size[0] // 2
+                    text_y = hand_center[1] - 40
+                    
+                    # Draw text background
+                    cv2.rectangle(frame, 
+                                (text_x - 5, text_y - text_size[1] - 5), 
+                                (text_x + text_size[0] + 5, text_y + 5), 
+                                (0, 0, 0), -1)
+                    
+                    # Draw text
+                    cv2.putText(frame, text, (text_x, text_y), font, font_scale, (0, 255, 255), font_thickness)
+                    
+                    # Draw arrow indicating rotation direction
+                    arrow_length = 20
+                    arrow_x = hand_center[0] + 50
+                    arrow_y = hand_center[1]
+                    
+                    # Draw left arrow (indicating left movement = clockwise)
+                    cv2.arrowedLine(frame, 
+                                  (arrow_x + arrow_length, arrow_y), 
+                                  (arrow_x, arrow_y), 
+                                  (0, 255, 255), 3, tipLength=0.3)
+                    
+                    # Draw right arrow (indicating right movement = counter-clockwise)
+                    cv2.arrowedLine(frame, 
+                                  (arrow_x, arrow_y), 
+                                  (arrow_x + arrow_length, arrow_y), 
+                                  (0, 255, 255), 3, tipLength=0.3)
+                    
+                    # Add labels for arrows
+                    cv2.putText(frame, "CW", (arrow_x - 15, arrow_y - 10), font, 0.4, (0, 255, 255), 1)
+                    cv2.putText(frame, "CCW", (arrow_x + arrow_length - 5, arrow_y - 10), font, 0.4, (0, 255, 255), 1)
         
         return frame
     
