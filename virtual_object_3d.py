@@ -314,11 +314,13 @@ class VirtualObject3D:
 
 
 class CADAssembly:
-    """Represents a CAD assembly with multiple individually manipulatable components"""
+    """Unified pipeline for loading both single objects and multi-component CAD assemblies"""
     
     def __init__(self, obj_path: str, x: float = 0, y: float = 0, z: float = 0, 
-                 scale: float = 1.0, color: Tuple[int, int, int] = (100, 150, 255)):
+                 scale: float = 1.0, color: Tuple[int, int, int] = (100, 150, 255),
+                 name: str = "Assembly"):
         self.obj_path = obj_path
+        self.name = name
         self.base_x = x
         self.base_y = y
         self.base_z = z
@@ -326,88 +328,100 @@ class CADAssembly:
         self.base_color = color
         self.components: Dict[str, VirtualObject3D] = {}
         self.component_offsets: Dict[str, Tuple[float, float, float]] = {}
-        
-        # Assembly-wide properties
-        self.is_grabbed = False
-        self.selected = False
+        self.is_single_object = False
         
         # Load the assembly
         self.load_assembly()
     
     def load_assembly(self) -> bool:
-        """Load the CAD assembly and create individual components"""
+        """Load the assembly - works for both single objects and multi-component assemblies"""
         loader = OBJLoader()
         if not loader.load_obj(self.obj_path):
-            print(f"Failed to load CAD assembly: {self.obj_path}")
+            print(f"Failed to load object/assembly: {self.obj_path}")
             return False
         
+        # Check if it's a single object or multi-component assembly
         if not loader.has_multiple_components():
-            # Single component - create one object
-            print(f"Single component detected, creating single object")
-            component_obj = VirtualObject3D.__new__(VirtualObject3D)
-            # Initialize without calling __init__ to avoid loading the file again
-            component_obj.obj_path = self.obj_path
-            component_obj.x = self.base_x
-            component_obj.y = self.base_y
-            component_obj.z = self.base_z
-            component_obj.scale = self.base_scale
-            component_obj.original_scale = self.base_scale
-            component_obj.color = self.base_color
-            
-            # Initialize other attributes
-            component_obj.rotation_x = 0.0
-            component_obj.rotation_y = 0.0
-            component_obj.rotation_z = 0.0
-            component_obj.is_grabbed = 0
-            component_obj.grabbed_by_hand = []
-            component_obj.highlighted = False
-            component_obj.selected = False
-            component_obj.is_selected = False
-            component_obj.selection_hand_idx = None
-            component_obj.last_selection_hand_pos = None
-            component_obj.is_in_rotation_mode = False
-            component_obj.rotation_hand_idx = None
-            component_obj.last_rotation_hand_pos = None
-            component_obj.auto_rotate = False
-            component_obj.auto_rotation_speed = 0.02
-            component_obj.render_mode = "solid"
-            
-            # Set the geometry directly
-            component_obj.loader = loader
-            component_obj.vertices = loader.get_vertices()
-            component_obj.faces = loader.get_faces()
-            
-            # Calculate face normals if not provided
-            if len(loader.get_normals()) > 0:
-                component_obj.face_normals = loader.get_normals()
-            else:
-                component_obj.face_normals = loader.calculate_face_normals()
-            
-            # Normalize model to reasonable size
-            loader.normalize_model(target_size=2.0)
-            component_obj.vertices = loader.get_vertices()
-            
-            # Calculate bounding box for collision detection
-            if len(component_obj.vertices) > 0:
-                min_bounds, max_bounds = loader.get_bounding_box()
-                component_obj.bounding_box_size = np.max(max_bounds - min_bounds) * component_obj.scale
-            
-            self.components["main"] = component_obj
-            self.component_offsets["main"] = (0, 0, 0)
-            return True
+            self.is_single_object = True
+            return self._load_as_single_object(loader)
+        else:
+            self.is_single_object = False
+            return self._load_as_multi_component_assembly(loader)
+    
+    def _load_as_single_object(self, loader: OBJLoader) -> bool:
+        """Load as a single-component assembly"""
+        print(f"Loading '{self.name}' as single object")
         
-        # Multiple components - create separate objects
+        component_obj = VirtualObject3D.__new__(VirtualObject3D)
+        # Initialize without calling __init__ to avoid loading the file again
+        component_obj.obj_path = self.obj_path
+        component_obj.x = self.base_x
+        component_obj.y = self.base_y
+        component_obj.z = self.base_z
+        component_obj.scale = self.base_scale
+        component_obj.original_scale = self.base_scale
+        component_obj.color = self.base_color
+        
+        # Initialize interaction attributes
+        component_obj.rotation_x = 0.0
+        component_obj.rotation_y = 0.0
+        component_obj.rotation_z = 0.0
+        component_obj.is_grabbed = 0
+        component_obj.grabbed_by_hand = []
+        component_obj.highlighted = False
+        component_obj.selected = False
+        component_obj.is_selected = False
+        component_obj.selection_hand_idx = None
+        component_obj.last_selection_hand_pos = None
+        component_obj.is_in_rotation_mode = False
+        component_obj.rotation_hand_idx = None
+        component_obj.last_rotation_hand_pos = None
+        component_obj.auto_rotate = False
+        component_obj.auto_rotation_speed = 0.02
+        component_obj.render_mode = "solid"
+        
+        # Set the geometry directly
+        component_obj.loader = loader
+        component_obj.vertices = loader.get_vertices()
+        component_obj.faces = loader.get_faces()
+        
+        # Calculate face normals if not provided
+        if len(loader.get_normals()) > 0:
+            component_obj.face_normals = loader.get_normals()
+        else:
+            component_obj.face_normals = loader.calculate_face_normals()
+        
+        # Normalize model to reasonable size
+        loader.normalize_model(target_size=2.0)
+        component_obj.vertices = loader.get_vertices()
+        
+        # Calculate bounding box for collision detection
+        if len(component_obj.vertices) > 0:
+            min_bounds, max_bounds = loader.get_bounding_box()
+            component_obj.bounding_box_size = np.max(max_bounds - min_bounds) * component_obj.scale
+        else:
+            component_obj.bounding_box_size = 1.0
+        
+        # Store as single component with the assembly name
+        self.components[self.name] = component_obj
+        self.component_offsets[self.name] = (0, 0, 0)
+        
+        print(f"✅ Loaded '{self.name}' as single-component assembly")
+        return True
+    
+    def _load_as_multi_component_assembly(self, loader: OBJLoader) -> bool:
+        """Load as a multi-component assembly"""
         components = loader.get_all_components()
-        print(f"Loading {len(components)} components: {list(components.keys())}")
+        print(f"Loading '{self.name}' as multi-component assembly with {len(components)} components: {list(components.keys())}")
         
         # Calculate the overall bounding box to center components relative to assembly origin
         all_vertices = []
         component_centers = {}
         
-        for name, (vertices, faces) in components.items():
+        for comp_name, (vertices, faces) in components.items():
             if len(vertices) > 0:
                 center = np.mean(vertices, axis=0)
-                component_centers[name] = center
+                component_centers[comp_name] = center
                 all_vertices.extend(vertices)
         
         if all_vertices:
@@ -416,26 +430,26 @@ class CADAssembly:
             assembly_center = np.array([0, 0, 0])
         
         # Create individual VirtualObject3D for each component
-        for name, (vertices, faces) in components.items():
+        for comp_name, (vertices, faces) in components.items():
             if len(vertices) == 0 or len(faces) == 0:
                 continue
                 
             # Calculate component offset from assembly center
-            component_center = component_centers[name]
+            component_center = component_centers[comp_name]
             offset = component_center - assembly_center
             
             # Create component object
             component_obj = VirtualObject3D.__new__(VirtualObject3D)
             # Initialize without calling __init__ to avoid loading file
-            component_obj.obj_path = f"{self.obj_path}#{name}"
+            component_obj.obj_path = f"{self.obj_path}#{comp_name}"
             component_obj.x = self.base_x + offset[0] * self.base_scale
             component_obj.y = self.base_y + offset[1] * self.base_scale
             component_obj.z = self.base_z + offset[2] * self.base_scale
             component_obj.scale = self.base_scale
             component_obj.original_scale = self.base_scale
-            component_obj.color = self._get_component_color(name)
+            component_obj.color = self._get_component_color(comp_name)
             
-            # Initialize other attributes
+            # Initialize interaction attributes
             component_obj.rotation_x = 0.0
             component_obj.rotation_y = 0.0
             component_obj.rotation_z = 0.0
@@ -471,10 +485,13 @@ class CADAssembly:
             else:
                 component_obj.bounding_box_size = 1.0
             
-            self.components[name] = component_obj
-            self.component_offsets[name] = tuple(offset)
+            self.components[comp_name] = component_obj
+            self.component_offsets[comp_name] = tuple(offset)
         
-        print(f"Successfully created CAD assembly with {len(self.components)} components")
+        print(f"✅ Loaded '{self.name}' with {len(self.components)} components:")
+        for comp_name in self.components.keys():
+            print(f"   - {comp_name}")
+        
         return True
     
     def _get_component_color(self, component_name: str) -> Tuple[int, int, int]:
@@ -489,22 +506,28 @@ class CADAssembly:
             "gear": (100, 255, 100),         # Green (alternative name)
             "wheel": (255, 150, 100),        # Orange
             "support": (255, 255, 100),      # Yellow (alternative)
-            "main": (100, 150, 255),         # Blue (for single components)
+            "base": (150, 150, 150),         # Gray
+            "arm": (255, 150, 50),           # Orange
+            "joint": (200, 100, 200),        # Purple
         }
         
         # Return specific color if available, otherwise generate based on hash
         if component_name.lower() in colors:
             return colors[component_name.lower()]
         
-        # Generate color based on component name hash
+        # Generate color based on component name hash for unknown components
         hash_val = hash(component_name) % 360
         # Convert HSV to RGB for varied colors
         import colorsys
         rgb = colorsys.hsv_to_rgb(hash_val / 360.0, 0.7, 0.9)
         return (int(rgb[2] * 255), int(rgb[1] * 255), int(rgb[0] * 255))  # BGR format
     
+    def get_all_components(self) -> List[VirtualObject3D]:
+        """Get all components as a list for adding to objects_3d"""
+        return list(self.components.values())
+    
     def get_components(self) -> Dict[str, VirtualObject3D]:
-        """Get all components"""
+        """Get all components as a dictionary"""
         return self.components
     
     def get_component_names(self) -> List[str]:
@@ -524,6 +547,11 @@ class CADAssembly:
         for component in self.components.values():
             component.set_render_mode(mode)
     
+    def set_auto_rotation_speed(self, speed: float):
+        """Set auto rotation speed for all components"""
+        for i, component in enumerate(self.components.values()):
+            component.auto_rotation_speed = speed + i * 0.005  # Slight variation
+    
     def toggle_auto_rotation(self):
         """Toggle auto rotation for all components"""
         for component in self.components.values():
@@ -533,3 +561,10 @@ class CADAssembly:
         """Reset rotation for all components"""
         for component in self.components.values():
             component.reset_rotation()
+    
+    def get_assembly_info(self) -> str:
+        """Get assembly information string"""
+        if self.is_single_object:
+            return f"{self.name} (Single Object)"
+        else:
+            return f"{self.name} ({len(self.components)} Components)"

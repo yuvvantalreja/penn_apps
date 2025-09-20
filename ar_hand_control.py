@@ -196,7 +196,7 @@ class ARHandController:
         self.detector = HandGestureDetector()
         self.objects: List[VirtualObject] = []
         self.objects_3d: List[VirtualObject3D] = []
-        self.assemblies: List[CADAssembly] = []  # New list for CAD assemblies
+        self.assemblies: List[CADAssembly] = []  # List for all assemblies (both single objects and multi-component)
         self.cap = None
         self.is_running = False
         
@@ -233,69 +233,75 @@ class ARHandController:
             VirtualObject(600, 250, 50, (100, 255, 100), "circle"), # Green ball
         ]
         
-        # 3D objects and CAD assemblies
+        # Initialize 3D objects list - will be populated with individual components from assemblies
         self.objects_3d = []
+        
+        # Initialize assemblies list
         self.assemblies = []
         
-        # Load the complex CAD assembly
-        complex_assembly_path = os.path.join(os.path.dirname(__file__), "complex_cad_assembly.obj")
-        if os.path.exists(complex_assembly_path):
-            try:
-                assembly = CADAssembly(
-                    complex_assembly_path,
-                    x=-2.0, y=0.0, z=-3.0,
-                    scale=0.8,
-                    color=(100, 150, 255)
-                )
-                self.assemblies.append(assembly)
-                print(f"✅ Loaded Complex CAD Assembly with {len(assembly.get_components())} components:")
-                for comp_name in assembly.get_component_names():
-                    print(f"   - {comp_name}")
-                    
-                # Add all components to objects_3d for individual manipulation
-                for component in assembly.get_components().values():
-                    component.set_render_mode("solid")
-                    component.auto_rotation_speed = 0.01
-                    self.objects_3d.append(component)
-            except Exception as e:
-                print(f"⚠️  Error loading Complex CAD Assembly: {e}")
-        else:
-            print(f"⚠️  Complex CAD Assembly not found at {complex_assembly_path}")
-        
-        # Load additional single-component models
-        single_models = [
+        # Load all objects through the unified CAD Assembly pipeline
+        # This handles both single objects and multi-component assemblies
+        models_to_load = [
+            # {
+            #     "path": "online/Wooden Crate.obj",
+            #     "name": "Wood Crate",
+            #     "position": (2.0, 0.0, -4.0),
+            #     "scale": 0.7,
+            #     "color": (139, 69, 19)  # Brown color for wood
+            # },
+            # {
+            #     "path": "online/valve.obj",
+            #     "name": "Valve",
+            #     "position": (-2.0, 1.0, -4.0),
+            #     "scale": 0.5,
+            #     "color": (192, 192, 192)  # Silver/gray color for metal valve
+            # },
             {
-                "path": "online/Wooden Crate.obj",
-                "name": "Wood Crate",
-                "position": (2.0, 0.0, -4.0),
-                "scale": 0.7,
-                "color": (100, 150, 255)
+                "path": "online/duck.obj",
+                "name": "duck",
+                "position": (0.0, 0.0, -3.0),
+                "scale": 0.8,
+                "color": (100, 200, 200)  # Blue color for assembly
             },
-            {
-                "path": "online/mustang.obj",
-                "name": "Mustang",
-                "position": (2.0, 0.0, -4.0),
-                "scale": 0.7,
-                "color": (100, 150, 255)
-            }
+            # {
+            #     "path": "online/Lowpoly_tree_sample.obj",
+            #     "name": "Tree",
+            #     "position": (0.0, -1.0, -5.0),
+            #     "scale": 1.0,
+            #     "color": (34, 139, 34)  # Forest green for tree
+            # }
         ]
         
-        for model_info in single_models:
+        # Load each model through the CADAssembly pipeline
+        for model_info in models_to_load:
             model_path = os.path.join(os.path.dirname(__file__), model_info["path"])
             if os.path.exists(model_path):
-                obj_3d = VirtualObject3D(
-                    model_path, 
-                    x=model_info["position"][0], 
-                    y=model_info["position"][1], 
-                    z=model_info["position"][2],
-                    scale=model_info["scale"], 
-                    color=model_info["color"]
-                )
-                obj_3d.set_render_mode("solid")
-                # Set different auto-rotation speeds for variety
-                obj_3d.auto_rotation_speed = 0.01 + len(self.objects_3d) * 0.005
-                self.objects_3d.append(obj_3d)
-                print(f"✅ Loaded {model_info['name']} from {model_info['path']}")
+                try:
+                    # Create assembly (works for both single objects and multi-component assemblies)
+                    assembly = CADAssembly(
+                        model_path,
+                        x=model_info["position"][0],
+                        y=model_info["position"][1], 
+                        z=model_info["position"][2],
+                        scale=model_info["scale"],
+                        color=model_info["color"],
+                        name=model_info["name"]
+                    )
+                    
+                    # Add assembly to list
+                    self.assemblies.append(assembly)
+                    
+                    # Add all components to objects_3d for individual manipulation
+                    for component in assembly.get_all_components():
+                        component.set_render_mode("solid")
+                        # Set different auto-rotation speeds for variety
+                        component.auto_rotation_speed = 0.01 + len(self.objects_3d) * 0.005
+                        self.objects_3d.append(component)
+                    
+                    print(f"✅ Loaded {assembly.get_assembly_info()}")
+                    
+                except Exception as e:
+                    print(f"⚠️  Error loading {model_info['name']}: {e}")
             else:
                 print(f"⚠️  {model_info['name']} not found at {model_path}")
     
@@ -341,11 +347,16 @@ class ARHandController:
         print("- Multi-component CAD assembly support")
         print("- Individual component manipulation")
         print("- Each component can be moved, rotated, and scaled independently")
+        print("- Multi-axis 3D rotation (Yaw, Pitch, Roll)")
         print("Gestures:")
         print("- Pinch (thumb + index) near object: Grab object or component")
         print("- Move hand while pinching: Move object/component (improved 3D tracking!)")
         print("- Grab object with TWO hands and move apart/closer: Scale object/component")
-        print("- Two hands: Rotate 3D objects/components")
+        print("- Two hands then release one: Enter multi-axis rotation mode")
+        print("- In rotation mode:")
+        print("  • Move horizontally: Yaw rotation (Y-axis)")
+        print("  • Move vertically: Pitch rotation (X-axis)")
+        print("  • Move diagonally: Roll rotation (Z-axis)")
         print("Controls:")
         print("- Press 'q' to quit")
         print("- Press 'r' to reset objects")
@@ -601,7 +612,7 @@ class ARHandController:
                                 if rotation_hand_info:
                                     obj_3d.last_rotation_hand_pos = rotation_hand_info['palm_center']
                                 
-                                print(f"Object entered rotation mode - Hand {hand_idx} controlling rotation")
+                                print(f"Object entered multi-axis rotation mode - Hand {hand_idx} controlling rotation")
                                 
                                 # Remove this hand from grabbed_by_hand but keep it in grab_states_3d for rotation tracking
                                 if hand_idx in obj_3d.grabbed_by_hand:
@@ -932,10 +943,10 @@ class ARHandController:
         if rotation_hand_info:
             obj_3d.last_rotation_hand_pos = rotation_hand_info['palm_center']
         
-        print(f"Object entered rotation mode - Hand {rotation_hand} controlling rotation")
+        print(f"Object entered multi-axis rotation mode - Hand {rotation_hand} controlling rotation")
     
     def _handle_rotation_mode_3d(self, hands_info: List[dict]):
-        """Handle rotation mode for 3D objects"""
+        """Handle rotation mode for 3D objects with multi-axis support"""
         for obj_3d in self.objects_3d:
             if obj_3d.is_in_rotation_mode and obj_3d.rotation_hand_idx is not None:
                 # Get current position of rotation hand
@@ -945,17 +956,49 @@ class ARHandController:
                     current_pos = rotation_hand_info['palm_center']
                     last_pos = obj_3d.last_rotation_hand_pos
                     
-                    # Calculate horizontal movement
-                    delta_x = current_pos[0] - last_pos[0]
+                    # Calculate movement in both axes
+                    delta_x = current_pos[0] - last_pos[0]  # Horizontal movement
+                    delta_y = current_pos[1] - last_pos[1]  # Vertical movement
                     
-                    # Apply rotation based on horizontal movement
-                    if abs(delta_x) > 5:  # Minimum movement threshold
-                        rotation_sensitivity = 0.01  # Adjust for rotation speed
+                    rotation_sensitivity = 0.01  # Base rotation speed
+                    movement_threshold = 5  # Minimum movement threshold
+                    
+                    # Apply Y-axis rotation based on horizontal movement (yaw)
+                    if abs(delta_x) > movement_threshold:
                         # Invert rotation direction: left movement = clockwise, right movement = counter-clockwise
                         obj_3d.rotation_y -= delta_x * rotation_sensitivity
                         
                         # Keep rotation in reasonable range
                         obj_3d.rotation_y = obj_3d.rotation_y % (2 * math.pi)
+                    
+                    # Apply X-axis rotation based on vertical movement (pitch)
+                    if abs(delta_y) > movement_threshold:
+                        # Natural direction: up movement = rotate up, down movement = rotate down
+                        obj_3d.rotation_x -= delta_y * rotation_sensitivity
+                        
+                        # Keep rotation in reasonable range
+                        obj_3d.rotation_x = obj_3d.rotation_x % (2 * math.pi)
+                    
+                    # Apply Z-axis rotation based on diagonal movement (roll)
+                    # Calculate diagonal movement magnitude and direction
+                    movement_magnitude = math.sqrt(delta_x**2 + delta_y**2)
+                    if movement_magnitude > movement_threshold:
+                        # Use the cross product concept - if moving diagonally, apply roll
+                        # This creates roll when moving in diagonal directions
+                        diagonal_threshold = movement_threshold * 1.5  # Require more diagonal movement
+                        
+                        if abs(delta_x) > movement_threshold and abs(delta_y) > movement_threshold:
+                            # Diagonal movement detected - apply roll
+                            # Roll direction based on diagonal quadrant
+                            if (delta_x > 0 and delta_y > 0) or (delta_x < 0 and delta_y < 0):
+                                # Top-right or bottom-left diagonal - positive roll
+                                roll_factor = movement_magnitude * 0.005  # Smaller sensitivity for roll
+                            else:
+                                # Top-left or bottom-right diagonal - negative roll
+                                roll_factor = -movement_magnitude * 0.005
+                            
+                            obj_3d.rotation_z += roll_factor
+                            obj_3d.rotation_z = obj_3d.rotation_z % (2 * math.pi)
                     
                     # Update last position
                     obj_3d.last_rotation_hand_pos = current_pos
@@ -972,7 +1015,7 @@ class ARHandController:
         obj_3d.is_in_rotation_mode = False
         obj_3d.rotation_hand_idx = None
         obj_3d.last_rotation_hand_pos = None
-        print(f"Object exited rotation mode")
+        print(f"Object exited multi-axis rotation mode")
                 
     
     def _handle_pinch_interaction_3d(self, hand_info: dict, hand_idx: int) -> bool:
@@ -1072,8 +1115,8 @@ class ARHandController:
         """Draw user interface elements"""
         # Draw instructions
         instructions = [
-            "AR Hand Control - Pinch to grab, move, and scale objects",
-            "Two hands required for scaling - move apart/closer to scale",
+            "AR Hand Control - Pinch to grab, move, scale, and multi-axis rotate",
+            "Two hands: scaling | Release one hand: multi-axis rotation",
             "Q: Quit | R: Reset | C: Add Object",
             f"Objects: {len(self.objects)} | Hands: {len(hands_info)}"
         ]
@@ -1112,7 +1155,7 @@ class ARHandController:
                     obj_3d = self.grab_states_3d[hand_idx]['object']
                     grab_state_text = ["Not grabbed", "1 hand", "2 hands"][obj_3d.is_grabbed]
                     scaling_text = " (SCALING)" if obj_3d.is_grabbed == 2 else ""
-                    rotation_text = f" (ROTATING - Hand {obj_3d.rotation_hand_idx})" if obj_3d.is_in_rotation_mode else ""
+                    rotation_text = f" (MULTI-AXIS ROTATION - Hand {obj_3d.rotation_hand_idx})" if obj_3d.is_in_rotation_mode else ""
                     status = f"3D GRABBED ✓ ({grab_state_text}{scaling_text}{rotation_text}, Scale: {obj_3d.scale:.1f})"
                     color = (0, 255, 255)  # Cyan for grabbed 3D
             elif is_pinching:
@@ -1144,16 +1187,28 @@ class ARHandController:
         cv2.putText(frame, f"Assemblies: {len(self.assemblies)} ({total_components} components)", 
                    (10, info_y + 40), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
         
+        # Show detailed assembly breakdown
+        assembly_info_y = info_y + 60
+        for i, assembly in enumerate(self.assemblies[:3]):  # Show up to 3 assemblies to avoid clutter
+            assembly_text = f"  • {assembly.get_assembly_info()}"
+            cv2.putText(frame, assembly_text, 
+                       (10, assembly_info_y + i * 15), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
+        
+        if len(self.assemblies) > 3:
+            cv2.putText(frame, f"  + {len(self.assemblies) - 3} more...", 
+                       (10, assembly_info_y + 45), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (150, 150, 150), 1)
+        
         if self.objects_3d:
             render_mode = self.objects_3d[0].render_mode
             auto_rotate = self.objects_3d[0].auto_rotate
+            mode_info_y = assembly_info_y + max(45, len(self.assemblies[:3]) * 15) + 15
             cv2.putText(frame, f"3D Mode: {render_mode} | Auto-rotate: {'ON' if auto_rotate else 'OFF'}", 
-                       (10, info_y + 60), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                       (10, mode_info_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
         
         return frame
     
     def _draw_rotation_hand_indicators(self, frame: np.ndarray, hands_info: List[dict]) -> np.ndarray:
-        """Draw visual indicators for hands controlling rotation"""
+        """Draw visual indicators for hands controlling multi-axis rotation"""
         for obj_3d in self.objects_3d:
             if obj_3d.is_in_rotation_mode and obj_3d.rotation_hand_idx is not None:
                 # Find the rotation hand
@@ -1162,17 +1217,17 @@ class ARHandController:
                 if rotation_hand_info:
                     # Draw a large circle around the rotation hand
                     hand_center = rotation_hand_info['palm_center']
-                    cv2.circle(frame, hand_center, 30, (0, 255, 255), 3)  # Cyan circle
-                    cv2.circle(frame, hand_center, 25, (0, 255, 255), -1)  # Filled cyan circle
+                    cv2.circle(frame, hand_center, 35, (0, 255, 255), 3)  # Cyan circle (slightly larger)
+                    cv2.circle(frame, hand_center, 30, (0, 255, 255), -1)  # Filled cyan circle (slightly larger)
                     
-                    # Draw "ROTATOR" text above the hand
-                    text = "ROTATOR"
+                    # Draw "MULTI-AXIS ROTATOR" text above the hand
+                    text = "MULTI-AXIS ROTATOR"
                     font = cv2.FONT_HERSHEY_SIMPLEX
-                    font_scale = 0.6
+                    font_scale = 0.5
                     font_thickness = 2
                     text_size = cv2.getTextSize(text, font, font_scale, font_thickness)[0]
                     text_x = hand_center[0] - text_size[0] // 2
-                    text_y = hand_center[1] - 40
+                    text_y = hand_center[1] - 50
                     
                     # Draw text background
                     cv2.rectangle(frame, 
@@ -1183,26 +1238,67 @@ class ARHandController:
                     # Draw text
                     cv2.putText(frame, text, (text_x, text_y), font, font_scale, (0, 255, 255), font_thickness)
                     
-                    # Draw arrow indicating rotation direction
-                    arrow_length = 20
-                    arrow_x = hand_center[0] + 50
-                    arrow_y = hand_center[1]
+                    # Draw control indicators around the hand
+                    arrow_length = 25
+                    offset_distance = 60
                     
-                    # Draw left arrow (indicating left movement = clockwise)
-                    cv2.arrowedLine(frame, 
-                                  (arrow_x + arrow_length, arrow_y), 
-                                  (arrow_x, arrow_y), 
-                                  (0, 255, 255), 3, tipLength=0.3)
+                    # Horizontal arrows for Y-axis rotation (yaw)
+                    left_arrow_start = (hand_center[0] - offset_distance, hand_center[1])
+                    left_arrow_end = (hand_center[0] - offset_distance - arrow_length, hand_center[1])
+                    right_arrow_start = (hand_center[0] + offset_distance, hand_center[1])
+                    right_arrow_end = (hand_center[0] + offset_distance + arrow_length, hand_center[1])
                     
-                    # Draw right arrow (indicating right movement = counter-clockwise)
-                    cv2.arrowedLine(frame, 
-                                  (arrow_x, arrow_y), 
-                                  (arrow_x + arrow_length, arrow_y), 
-                                  (0, 255, 255), 3, tipLength=0.3)
+                    cv2.arrowedLine(frame, left_arrow_start, left_arrow_end, (255, 100, 100), 3, tipLength=0.3)  # Red for yaw
+                    cv2.arrowedLine(frame, right_arrow_start, right_arrow_end, (255, 100, 100), 3, tipLength=0.3)
+                    cv2.putText(frame, "YAW", (hand_center[0] - 15, hand_center[1] - 35), font, 0.4, (255, 100, 100), 1)
                     
-                    # Add labels for arrows
-                    cv2.putText(frame, "CW", (arrow_x - 15, arrow_y - 10), font, 0.4, (0, 255, 255), 1)
-                    cv2.putText(frame, "CCW", (arrow_x + arrow_length - 5, arrow_y - 10), font, 0.4, (0, 255, 255), 1)
+                    # Vertical arrows for X-axis rotation (pitch)
+                    up_arrow_start = (hand_center[0], hand_center[1] - offset_distance)
+                    up_arrow_end = (hand_center[0], hand_center[1] - offset_distance - arrow_length)
+                    down_arrow_start = (hand_center[0], hand_center[1] + offset_distance)
+                    down_arrow_end = (hand_center[0], hand_center[1] + offset_distance + arrow_length)
+                    
+                    cv2.arrowedLine(frame, up_arrow_start, up_arrow_end, (100, 255, 100), 3, tipLength=0.3)  # Green for pitch
+                    cv2.arrowedLine(frame, down_arrow_start, down_arrow_end, (100, 255, 100), 3, tipLength=0.3)
+                    cv2.putText(frame, "PITCH", (hand_center[0] + 20, hand_center[1] - 5), font, 0.4, (100, 255, 100), 1)
+                    
+                    # Diagonal arrows for Z-axis rotation (roll)
+                    diagonal_offset = int(offset_distance * 0.707)  # 45 degrees
+                    
+                    # Top-left to bottom-right diagonal
+                    tl_start = (hand_center[0] - diagonal_offset, hand_center[1] - diagonal_offset)
+                    tl_end = (hand_center[0] - diagonal_offset - int(arrow_length * 0.707), hand_center[1] - diagonal_offset - int(arrow_length * 0.707))
+                    
+                    # Top-right to bottom-left diagonal  
+                    tr_start = (hand_center[0] + diagonal_offset, hand_center[1] - diagonal_offset)
+                    tr_end = (hand_center[0] + diagonal_offset + int(arrow_length * 0.707), hand_center[1] - diagonal_offset - int(arrow_length * 0.707))
+                    
+                    cv2.arrowedLine(frame, tl_start, tl_end, (100, 100, 255), 2, tipLength=0.4)  # Blue for roll
+                    cv2.arrowedLine(frame, tr_start, tr_end, (100, 100, 255), 2, tipLength=0.4)
+                    cv2.putText(frame, "ROLL", (hand_center[0] - 40, hand_center[1] + 45), font, 0.4, (100, 100, 255), 1)
+                    
+                    # Draw instruction text below the hand
+                    instruction_lines = [
+                        "Move horizontally: Yaw rotation",
+                        "Move vertically: Pitch rotation", 
+                        "Move diagonally: Roll rotation"
+                    ]
+                    
+                    instruction_y_start = hand_center[1] + 70
+                    for i, line in enumerate(instruction_lines):
+                        instruction_y = instruction_y_start + i * 20
+                        line_text_size = cv2.getTextSize(line, font, 0.4, 1)[0]
+                        instruction_x = hand_center[0] - line_text_size[0] // 2
+                        
+                        # Draw instruction background
+                        cv2.rectangle(frame,
+                                    (instruction_x - 3, instruction_y - 12),
+                                    (instruction_x + line_text_size[0] + 3, instruction_y + 3),
+                                    (0, 0, 0), -1)
+                        
+                        # Draw instruction text
+                        colors = [(255, 100, 100), (100, 255, 100), (100, 100, 255)]  # Red, Green, Blue
+                        cv2.putText(frame, line, (instruction_x, instruction_y), font, 0.4, colors[i], 1)
         
         return frame
     
