@@ -3,16 +3,18 @@ from typing import List, Tuple, Optional
 import os
 
 class OBJLoader:
-    """Loader for OBJ 3D model files"""
+    """Loader for OBJ 3D model files with multi-component support"""
     
     def __init__(self):
         self.vertices = []
         self.faces = []
         self.normals = []
         self.texture_coords = []
+        self.groups = {}  # Dictionary to store groups/components
+        self.current_group = "default"  # Current group being processed
         
     def load_obj(self, filepath: str) -> bool:
-        """Load an OBJ file and parse its contents"""
+        """Load an OBJ file and parse its contents with group support"""
         if not os.path.exists(filepath):
             print(f"Error: OBJ file not found: {filepath}")
             return False
@@ -21,6 +23,9 @@ class OBJLoader:
         self.faces = []
         self.normals = []
         self.texture_coords = []
+        self.groups = {}
+        self.current_group = "default"
+        self.groups[self.current_group] = {"faces": [], "vertex_indices": set()}
         
         try:
             with open(filepath, 'r') as file:
@@ -48,6 +53,12 @@ class OBJLoader:
                             tex_coord = [float(parts[1]), float(parts[2])]
                             self.texture_coords.append(tex_coord)
                             
+                    elif parts[0] == 'g':  # Group
+                        if len(parts) >= 2:
+                            self.current_group = parts[1]
+                            if self.current_group not in self.groups:
+                                self.groups[self.current_group] = {"faces": [], "vertex_indices": set()}
+                            
                     elif parts[0] == 'f':  # Face
                         face_vertices = []
                         valid_face = True
@@ -69,6 +80,12 @@ class OBJLoader:
                                 triangle = [face_vertices[0], face_vertices[i], face_vertices[i + 1]]
                                 # Only add triangle if all vertices are valid (will be checked later)
                                 self.faces.append(triangle)
+                                # Track which group this face belongs to
+                                face_index = len(self.faces) - 1
+                                self.groups[self.current_group]["faces"].append(face_index)
+                                # Track vertex indices used by this group
+                                for vertex_idx in triangle:
+                                    self.groups[self.current_group]["vertex_indices"].add(vertex_idx)
                                 
         except Exception as e:
             print(f"Error loading OBJ file: {e}")
@@ -77,7 +94,14 @@ class OBJLoader:
         # Validate and clean up faces
         self._validate_faces()
         
-        print(f"Loaded OBJ: {len(self.vertices)} vertices, {len(self.faces)} faces")
+        # Clean up empty groups
+        empty_groups = [name for name, data in self.groups.items() if not data["faces"]]
+        for name in empty_groups:
+            del self.groups[name]
+        
+        print(f"Loaded OBJ: {len(self.vertices)} vertices, {len(self.faces)} faces, {len(self.groups)} groups")
+        if len(self.groups) > 1:
+            print(f"Groups: {list(self.groups.keys())}")
         return True
         
     def _validate_faces(self) -> None:
@@ -191,3 +215,59 @@ class OBJLoader:
             vertices *= scale_factor
             
         self.vertices = vertices.tolist()
+    
+    def has_multiple_components(self) -> bool:
+        """Check if the OBJ file has multiple components/groups"""
+        return len(self.groups) > 1
+    
+    def get_group_names(self) -> List[str]:
+        """Get list of group names"""
+        return list(self.groups.keys())
+    
+    def get_component_data(self, group_name: str) -> Tuple[np.ndarray, np.ndarray]:
+        """Get vertices and faces for a specific component/group"""
+        if group_name not in self.groups:
+            print(f"Warning: Group '{group_name}' not found")
+            return np.array([]), np.array([])
+        
+        group_data = self.groups[group_name]
+        
+        # Get unique vertex indices used by this group
+        vertex_indices = sorted(list(group_data["vertex_indices"]))
+        
+        if not vertex_indices:
+            return np.array([]), np.array([])
+        
+        # Extract vertices for this group
+        group_vertices = []
+        vertex_mapping = {}  # Old index -> new index mapping
+        
+        for new_idx, old_idx in enumerate(vertex_indices):
+            if old_idx < len(self.vertices):
+                group_vertices.append(self.vertices[old_idx])
+                vertex_mapping[old_idx] = new_idx
+        
+        # Extract faces for this group and remap vertex indices
+        group_faces = []
+        for face_idx in group_data["faces"]:
+            if face_idx < len(self.faces):
+                old_face = self.faces[face_idx]
+                # Remap vertex indices to the new local indices
+                new_face = []
+                for vertex_idx in old_face:
+                    if vertex_idx in vertex_mapping:
+                        new_face.append(vertex_mapping[vertex_idx])
+                
+                if len(new_face) == len(old_face):  # Only add if all vertices were mapped
+                    group_faces.append(new_face)
+        
+        return np.array(group_vertices, dtype=np.float32), np.array(group_faces, dtype=np.int32)
+    
+    def get_all_components(self) -> dict:
+        """Get all components as a dictionary of {name: (vertices, faces)}"""
+        components = {}
+        for group_name in self.groups.keys():
+            vertices, faces = self.get_component_data(group_name)
+            if len(vertices) > 0 and len(faces) > 0:
+                components[group_name] = (vertices, faces)
+        return components

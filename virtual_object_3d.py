@@ -1,7 +1,7 @@
 import numpy as np
 import cv2
 import math
-from typing import Tuple, Optional
+from typing import Tuple, Optional, List, Dict
 from obj_loader import OBJLoader
 from renderer_3d import Renderer3D, Transform3D
 
@@ -311,3 +311,225 @@ class VirtualObject3D:
         self.rotation_x = 0.0
         self.rotation_y = 0.0
         self.rotation_z = 0.0
+
+
+class CADAssembly:
+    """Represents a CAD assembly with multiple individually manipulatable components"""
+    
+    def __init__(self, obj_path: str, x: float = 0, y: float = 0, z: float = 0, 
+                 scale: float = 1.0, color: Tuple[int, int, int] = (100, 150, 255)):
+        self.obj_path = obj_path
+        self.base_x = x
+        self.base_y = y
+        self.base_z = z
+        self.base_scale = scale
+        self.base_color = color
+        self.components: Dict[str, VirtualObject3D] = {}
+        self.component_offsets: Dict[str, Tuple[float, float, float]] = {}
+        
+        # Assembly-wide properties
+        self.is_grabbed = False
+        self.selected = False
+        
+        # Load the assembly
+        self.load_assembly()
+    
+    def load_assembly(self) -> bool:
+        """Load the CAD assembly and create individual components"""
+        loader = OBJLoader()
+        if not loader.load_obj(self.obj_path):
+            print(f"Failed to load CAD assembly: {self.obj_path}")
+            return False
+        
+        if not loader.has_multiple_components():
+            # Single component - create one object
+            print(f"Single component detected, creating single object")
+            component_obj = VirtualObject3D.__new__(VirtualObject3D)
+            # Initialize without calling __init__ to avoid loading the file again
+            component_obj.obj_path = self.obj_path
+            component_obj.x = self.base_x
+            component_obj.y = self.base_y
+            component_obj.z = self.base_z
+            component_obj.scale = self.base_scale
+            component_obj.original_scale = self.base_scale
+            component_obj.color = self.base_color
+            
+            # Initialize other attributes
+            component_obj.rotation_x = 0.0
+            component_obj.rotation_y = 0.0
+            component_obj.rotation_z = 0.0
+            component_obj.is_grabbed = 0
+            component_obj.grabbed_by_hand = []
+            component_obj.highlighted = False
+            component_obj.selected = False
+            component_obj.is_selected = False
+            component_obj.selection_hand_idx = None
+            component_obj.last_selection_hand_pos = None
+            component_obj.is_in_rotation_mode = False
+            component_obj.rotation_hand_idx = None
+            component_obj.last_rotation_hand_pos = None
+            component_obj.auto_rotate = False
+            component_obj.auto_rotation_speed = 0.02
+            component_obj.render_mode = "solid"
+            
+            # Set the geometry directly
+            component_obj.loader = loader
+            component_obj.vertices = loader.get_vertices()
+            component_obj.faces = loader.get_faces()
+            
+            # Calculate face normals if not provided
+            if len(loader.get_normals()) > 0:
+                component_obj.face_normals = loader.get_normals()
+            else:
+                component_obj.face_normals = loader.calculate_face_normals()
+            
+            # Normalize model to reasonable size
+            loader.normalize_model(target_size=2.0)
+            component_obj.vertices = loader.get_vertices()
+            
+            # Calculate bounding box for collision detection
+            if len(component_obj.vertices) > 0:
+                min_bounds, max_bounds = loader.get_bounding_box()
+                component_obj.bounding_box_size = np.max(max_bounds - min_bounds) * component_obj.scale
+            
+            self.components["main"] = component_obj
+            self.component_offsets["main"] = (0, 0, 0)
+            return True
+        
+        # Multiple components - create separate objects
+        components = loader.get_all_components()
+        print(f"Loading {len(components)} components: {list(components.keys())}")
+        
+        # Calculate the overall bounding box to center components relative to assembly origin
+        all_vertices = []
+        component_centers = {}
+        
+        for name, (vertices, faces) in components.items():
+            if len(vertices) > 0:
+                center = np.mean(vertices, axis=0)
+                component_centers[name] = center
+                all_vertices.extend(vertices)
+        
+        if all_vertices:
+            assembly_center = np.mean(all_vertices, axis=0)
+        else:
+            assembly_center = np.array([0, 0, 0])
+        
+        # Create individual VirtualObject3D for each component
+        for name, (vertices, faces) in components.items():
+            if len(vertices) == 0 or len(faces) == 0:
+                continue
+                
+            # Calculate component offset from assembly center
+            component_center = component_centers[name]
+            offset = component_center - assembly_center
+            
+            # Create component object
+            component_obj = VirtualObject3D.__new__(VirtualObject3D)
+            # Initialize without calling __init__ to avoid loading file
+            component_obj.obj_path = f"{self.obj_path}#{name}"
+            component_obj.x = self.base_x + offset[0] * self.base_scale
+            component_obj.y = self.base_y + offset[1] * self.base_scale
+            component_obj.z = self.base_z + offset[2] * self.base_scale
+            component_obj.scale = self.base_scale
+            component_obj.original_scale = self.base_scale
+            component_obj.color = self._get_component_color(name)
+            
+            # Initialize other attributes
+            component_obj.rotation_x = 0.0
+            component_obj.rotation_y = 0.0
+            component_obj.rotation_z = 0.0
+            component_obj.is_grabbed = 0
+            component_obj.grabbed_by_hand = []
+            component_obj.highlighted = False
+            component_obj.selected = False
+            component_obj.is_selected = False
+            component_obj.selection_hand_idx = None
+            component_obj.last_selection_hand_pos = None
+            component_obj.is_in_rotation_mode = False
+            component_obj.rotation_hand_idx = None
+            component_obj.last_rotation_hand_pos = None
+            component_obj.auto_rotate = False
+            component_obj.auto_rotation_speed = 0.02
+            component_obj.render_mode = "solid"
+            
+            # Create a temporary loader for this component
+            temp_loader = OBJLoader()
+            temp_loader.vertices = vertices.tolist()
+            temp_loader.faces = faces.tolist()
+            
+            component_obj.loader = temp_loader
+            component_obj.vertices = vertices
+            component_obj.faces = faces
+            component_obj.face_normals = temp_loader.calculate_face_normals()
+            
+            # Calculate bounding box
+            if len(vertices) > 0:
+                min_bounds = np.min(vertices, axis=0)
+                max_bounds = np.max(vertices, axis=0)
+                component_obj.bounding_box_size = np.max(max_bounds - min_bounds) * component_obj.scale
+            else:
+                component_obj.bounding_box_size = 1.0
+            
+            self.components[name] = component_obj
+            self.component_offsets[name] = tuple(offset)
+        
+        print(f"Successfully created CAD assembly with {len(self.components)} components")
+        return True
+    
+    def _get_component_color(self, component_name: str) -> Tuple[int, int, int]:
+        """Get a unique color for each component"""
+        # Define colors for different components
+        colors = {
+            "housing": (100, 150, 255),      # Blue
+            "shaft": (255, 100, 100),        # Red
+            "gear_wheel": (100, 255, 100),   # Green
+            "bracket": (255, 255, 100),      # Yellow
+            "connector": (255, 100, 255),    # Magenta
+            "gear": (100, 255, 100),         # Green (alternative name)
+            "wheel": (255, 150, 100),        # Orange
+            "support": (255, 255, 100),      # Yellow (alternative)
+            "main": (100, 150, 255),         # Blue (for single components)
+        }
+        
+        # Return specific color if available, otherwise generate based on hash
+        if component_name.lower() in colors:
+            return colors[component_name.lower()]
+        
+        # Generate color based on component name hash
+        hash_val = hash(component_name) % 360
+        # Convert HSV to RGB for varied colors
+        import colorsys
+        rgb = colorsys.hsv_to_rgb(hash_val / 360.0, 0.7, 0.9)
+        return (int(rgb[2] * 255), int(rgb[1] * 255), int(rgb[0] * 255))  # BGR format
+    
+    def get_components(self) -> Dict[str, VirtualObject3D]:
+        """Get all components"""
+        return self.components
+    
+    def get_component_names(self) -> List[str]:
+        """Get list of component names"""
+        return list(self.components.keys())
+    
+    def get_component(self, name: str) -> Optional[VirtualObject3D]:
+        """Get a specific component by name"""
+        return self.components.get(name)
+    
+    def is_any_component_grabbed(self) -> bool:
+        """Check if any component is currently grabbed"""
+        return any(comp.is_grabbed > 0 for comp in self.components.values())
+    
+    def set_render_mode(self, mode: str):
+        """Set render mode for all components"""
+        for component in self.components.values():
+            component.set_render_mode(mode)
+    
+    def toggle_auto_rotation(self):
+        """Toggle auto rotation for all components"""
+        for component in self.components.values():
+            component.toggle_auto_rotation()
+    
+    def reset_rotation(self):
+        """Reset rotation for all components"""
+        for component in self.components.values():
+            component.reset_rotation()

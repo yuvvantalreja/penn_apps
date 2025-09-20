@@ -6,7 +6,7 @@ from typing import List, Tuple, Optional
 import time
 import os
 from renderer_3d import Renderer3D
-from virtual_object_3d import VirtualObject3D
+from virtual_object_3d import VirtualObject3D, CADAssembly
 
 class VirtualObject:
     """Represents a virtual object that can be manipulated in AR space"""
@@ -196,6 +196,7 @@ class ARHandController:
         self.detector = HandGestureDetector()
         self.objects: List[VirtualObject] = []
         self.objects_3d: List[VirtualObject3D] = []
+        self.assemblies: List[CADAssembly] = []  # New list for CAD assemblies
         self.cap = None
         self.is_running = False
         
@@ -232,28 +233,54 @@ class ARHandController:
             VirtualObject(600, 250, 50, (100, 255, 100), "circle"), # Green ball
         ]
         
-        # 3D objects
+        # 3D objects and CAD assemblies
         self.objects_3d = []
+        self.assemblies = []
         
-        # Load multiple CAD components for testing
-        cad_models = [
+        # Load the complex CAD assembly
+        complex_assembly_path = os.path.join(os.path.dirname(__file__), "complex_cad_assembly.obj")
+        if os.path.exists(complex_assembly_path):
+            try:
+                assembly = CADAssembly(
+                    complex_assembly_path,
+                    x=-2.0, y=0.0, z=-3.0,
+                    scale=0.8,
+                    color=(100, 150, 255)
+                )
+                self.assemblies.append(assembly)
+                print(f"✅ Loaded Complex CAD Assembly with {len(assembly.get_components())} components:")
+                for comp_name in assembly.get_component_names():
+                    print(f"   - {comp_name}")
+                    
+                # Add all components to objects_3d for individual manipulation
+                for component in assembly.get_components().values():
+                    component.set_render_mode("solid")
+                    component.auto_rotation_speed = 0.01
+                    self.objects_3d.append(component)
+            except Exception as e:
+                print(f"⚠️  Error loading Complex CAD Assembly: {e}")
+        else:
+            print(f"⚠️  Complex CAD Assembly not found at {complex_assembly_path}")
+        
+        # Load additional single-component models
+        single_models = [
             {
                 "path": "online/Wooden Crate.obj",
                 "name": "Wood Crate",
-                "position": (0.0, 0.0, -4.0),
+                "position": (2.0, 0.0, -4.0),
                 "scale": 0.7,
                 "color": (100, 150, 255)
             },
             {
-                "path": "ironman_simple.obj",
-                "name": "Iron Man",
-                "position": (3.0, 0.0, -2.0),
+                "path": "online/mustang.obj",
+                "name": "Mustang",
+                "position": (2.0, 0.0, -4.0),
                 "scale": 0.7,
                 "color": (100, 150, 255)
-            },
+            }
         ]
         
-        for model_info in cad_models:
+        for model_info in single_models:
             model_path = os.path.join(os.path.dirname(__file__), model_info["path"])
             if os.path.exists(model_path):
                 obj_3d = VirtualObject3D(
@@ -310,12 +337,15 @@ class ARHandController:
         
         self.is_running = True
         print("AR Hand Control started!")
+        print("Features:")
+        print("- Multi-component CAD assembly support")
+        print("- Individual component manipulation")
+        print("- Each component can be moved, rotated, and scaled independently")
         print("Gestures:")
-        print("- Pinch (thumb + index) near object: Grab object")
-        print("- Move hand while pinching: Move object (improved 3D tracking!)")
-        print("- Grab object with TWO hands and move apart/closer: Scale object")
-        print("- Two hands: Rotate 3D objects")
-        print("- 3D objects now follow pinch point more accurately")
+        print("- Pinch (thumb + index) near object: Grab object or component")
+        print("- Move hand while pinching: Move object/component (improved 3D tracking!)")
+        print("- Grab object with TWO hands and move apart/closer: Scale object/component")
+        print("- Two hands: Rotate 3D objects/components")
         print("Controls:")
         print("- Press 'q' to quit")
         print("- Press 'r' to reset objects")
@@ -401,6 +431,7 @@ class ARHandController:
             self._create_initial_objects()
             self.grab_states.clear()
             self.grab_states_3d.clear()
+            print("Reset all objects and assemblies")
         elif key == ord('c'):
             self._add_random_object()
         elif key == ord('1'):
@@ -1102,17 +1133,22 @@ class ARHandController:
                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
         
         # Show object counts and mode info
-        info_y = frame.shape[0] - 80
+        info_y = frame.shape[0] - 100
         cv2.putText(frame, f"2D Objects: {len(self.objects)} {'(ON)' if self.show_2d_objects else '(OFF)'}", 
                    (10, info_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
         cv2.putText(frame, f"3D Objects: {len(self.objects_3d)} {'(ON)' if self.show_3d_objects else '(OFF)'}", 
                    (10, info_y + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
         
+        # Show assembly info
+        total_components = sum(len(assembly.get_components()) for assembly in self.assemblies)
+        cv2.putText(frame, f"Assemblies: {len(self.assemblies)} ({total_components} components)", 
+                   (10, info_y + 40), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        
         if self.objects_3d:
             render_mode = self.objects_3d[0].render_mode
             auto_rotate = self.objects_3d[0].auto_rotate
             cv2.putText(frame, f"3D Mode: {render_mode} | Auto-rotate: {'ON' if auto_rotate else 'OFF'}", 
-                       (10, info_y + 40), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                       (10, info_y + 60), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
         
         return frame
     
