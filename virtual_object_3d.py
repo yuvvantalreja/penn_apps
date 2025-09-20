@@ -182,6 +182,31 @@ class VirtualObject3D:
         
         return distance <= hit_radius
     
+    def get_screen_position(self, renderer: Renderer3D) -> Optional[Tuple[float, float]]:
+        """Get the screen position of the object's center"""
+        if len(self.vertices) == 0:
+            return None
+        
+        # Project object center to screen space
+        center_3d = np.array([[self.x, self.y, self.z, 1.0]])
+        model_matrix = self.get_model_matrix()
+        
+        # Transform to screen coordinates
+        mvp_matrix = renderer.projection_matrix @ renderer.view_matrix @ model_matrix
+        projected_center = center_3d @ mvp_matrix.T
+        
+        if projected_center[0, 3] <= 0:  # Behind camera
+            return None
+        
+        # Perspective divide
+        projected_center[:, :3] /= projected_center[:, 3:4]
+        
+        # Convert to screen coordinates
+        screen_x = (projected_center[0, 0] + 1) * renderer.width / 2
+        screen_y = (1 - projected_center[0, 1]) * renderer.height / 2
+        
+        return (screen_x, screen_y)
+    
     def move_to(self, x: float, y: float, z: Optional[float] = None):
         """Move the object to a new position"""
         # Convert 2D screen coordinates to 3D world coordinates

@@ -229,33 +229,12 @@ class ARHandController:
         # Load multiple CAD components for testing
         cad_models = [
             {
-                "path": "complex_cad_assembly.obj",
+                "path": "online/Wooden Crate.obj",
                 "name": "Complex CAD Assembly",
                 "position": (0.0, 0.0, -4.0),
                 "scale": 1.2,
                 "color": (100, 150, 255)
             },
-            {
-                "path": "simple_cad_assembly.obj",
-                "name": "Simple CAD Assembly",
-                "position": (-3.0, 0.0, -3.5),
-                "scale": 0.8,
-                "color": (255, 150, 100)
-            },
-            {
-                "path": "objtest_yup.obj", 
-                "name": "Test Object",
-                "position": (3.0, 0.0, -3.0),
-                "scale": 0.5,
-                "color": (150, 100, 200)
-            },
-            {
-                "path": "bow.obj",
-                "name": "Bow Model", 
-                "position": (0.0, 2.0, -5.0),
-                "scale": 0.3,
-                "color": (200, 150, 100)
-            }
         ]
         
         for model_info in cad_models:
@@ -317,9 +296,10 @@ class ARHandController:
         print("AR Hand Control started!")
         print("Gestures:")
         print("- Pinch (thumb + index) near object: Grab object")
-        print("- Move hand while pinching: Move object")
+        print("- Move hand while pinching: Move object (improved 3D tracking!)")
         print("- Pinch and spread: Scale object")
         print("- Two hands: Rotate 3D objects")
+        print("- 3D objects now follow pinch point more accurately")
         print("Controls:")
         print("- Press 'q' to quit")
         print("- Press 'r' to reset objects")
@@ -360,6 +340,21 @@ class ARHandController:
         if self.show_3d_objects and self.renderer_3d:
             for obj_3d in self.objects_3d:
                 frame = obj_3d.draw(frame, self.renderer_3d)
+                
+                # Draw targeting indicator for 3D objects when pinching near them
+                for hand_info in hands_info:
+                    if (hand_info['is_pinching'] and 
+                        not obj_3d.is_grabbed and 
+                        obj_3d.is_point_inside(hand_info['pinch_center'][0], hand_info['pinch_center'][1], self.renderer_3d)):
+                        
+                        screen_pos = obj_3d.get_screen_position(self.renderer_3d)
+                        if screen_pos:
+                            # Draw targeting circle
+                            cv2.circle(frame, (int(screen_pos[0]), int(screen_pos[1])), 60, (255, 255, 0), 3)
+                            cv2.circle(frame, (int(screen_pos[0]), int(screen_pos[1])), 40, (255, 255, 0), 2)
+                            
+                            # Draw line from pinch center to object center
+                            cv2.line(frame, hand_info['pinch_center'], (int(screen_pos[0]), int(screen_pos[1])), (255, 255, 0), 2)
             
         # Draw hand landmarks
         frame = self.detector.draw_landmarks(frame, hands_info)
@@ -575,9 +570,11 @@ class ARHandController:
             obj.size = max(20, min(150, obj.size))  # Clamp size
     
     def _handle_pinch_interaction_3d(self, hand_info: dict, hand_idx: int) -> bool:
-        """Handle pinch gesture interaction with 3D objects"""
+        """Handle pinch gesture interaction with 3D objects with improved tracking"""
         pinch_center = hand_info['pinch_center']
         pinch_distance = hand_info['pinch_distance']
+        thumb_pos = hand_info['thumb_pos']
+        index_pos = hand_info['index_pos']
         
         if hand_idx not in self.grab_states_3d:
             # Try to grab a 3D object
@@ -595,11 +592,22 @@ class ARHandController:
             if closest_obj_3d:
                 closest_obj_3d.is_grabbed = True
                 closest_obj_3d.grabbed_by_hand = hand_idx
+                
+                # Get the current 3D object's screen position for calculating grab offset
+                current_screen_pos = closest_obj_3d.get_screen_position(self.renderer_3d)
+                
                 self.grab_states_3d[hand_idx] = {
                     'object': closest_obj_3d,
                     'initial_pinch_distance': pinch_distance,
                     'initial_scale': closest_obj_3d.scale,
-                    'last_hand_pos': pinch_center
+                    'initial_world_pos': (closest_obj_3d.x, closest_obj_3d.y, closest_obj_3d.z),
+                    'grab_offset_x': pinch_center[0] - current_screen_pos[0] if current_screen_pos else 0,
+                    'grab_offset_y': pinch_center[1] - current_screen_pos[1] if current_screen_pos else 0,
+                    'last_pinch_center': pinch_center,
+                    'last_thumb_pos': thumb_pos,
+                    'last_index_pos': index_pos,
+                    'smoothing_factor': 0.3,  # For smooth movement (lower = more responsive)
+                    'movement_sensitivity': 0.005  # Controls how much screen movement affects 3D position
                 }
                 return True
         else:
@@ -607,21 +615,58 @@ class ARHandController:
             grab_state = self.grab_states_3d[hand_idx]
             obj_3d = grab_state['object']
             
-            # Move object based on hand movement
-            last_pos = grab_state['last_hand_pos']
-            delta_x = pinch_center[0] - last_pos[0]
-            delta_y = pinch_center[1] - last_pos[1]
+            # Calculate movement based on pinch center change with grab offset compensation
+            target_x = pinch_center[0] - grab_state['grab_offset_x']
+            target_y = pinch_center[1] - grab_state['grab_offset_y']
             
-            # Convert screen movement to 3D world movement
-            obj_3d.move_to(pinch_center[0], pinch_center[1])
+            # Get current screen position of the 3D object
+            current_screen_pos = obj_3d.get_screen_position(self.renderer_3d)
             
-            # Scale object based on pinch distance change
+            if current_screen_pos:
+                # Calculate screen space movement
+                screen_delta_x = target_x - current_screen_pos[0]
+                screen_delta_y = target_y - current_screen_pos[1]
+                
+                # Convert screen movement to world space movement
+                sensitivity = grab_state['movement_sensitivity']
+                world_delta_x = screen_delta_x * sensitivity
+                world_delta_y = -screen_delta_y * sensitivity  # Invert Y for correct direction
+                
+                # Choose between smooth and direct movement based on distance
+                movement_threshold = 5.0  # pixels
+                screen_movement_magnitude = math.sqrt(screen_delta_x**2 + screen_delta_y**2)
+                
+                if screen_movement_magnitude > movement_threshold:
+                    # For larger movements, use direct tracking for responsiveness
+                    obj_3d.x += world_delta_x
+                    obj_3d.y += world_delta_y
+                else:
+                    # For smaller movements, use smoothing to reduce jitter
+                    smoothing = grab_state['smoothing_factor']
+                    new_x = obj_3d.x + world_delta_x * (1 - smoothing) + world_delta_x * smoothing
+                    new_y = obj_3d.y + world_delta_y * (1 - smoothing) + world_delta_y * smoothing
+                    
+                    # Update 3D object position
+                    obj_3d.x = new_x
+                    obj_3d.y = new_y
+            
+            # Enhanced scaling with better control
             initial_distance = grab_state['initial_pinch_distance']
-            scale_factor = pinch_distance / initial_distance if initial_distance > 0 else 1.0
-            obj_3d.scale_object(scale_factor)
+            if initial_distance > 0:
+                scale_factor = pinch_distance / initial_distance
+                # Limit scaling range and add deadzone for stability
+                if abs(scale_factor - 1.0) > 0.1:  # Deadzone to prevent jittery scaling
+                    # Smooth scaling transition
+                    current_scale_factor = obj_3d.scale / grab_state['initial_scale']
+                    new_scale_factor = current_scale_factor * 0.9 + scale_factor * 0.1
+                    # Apply the scale factor relative to original scale
+                    obj_3d.scale_object(new_scale_factor)
             
-            # Update last position
-            grab_state['last_hand_pos'] = pinch_center
+            # Track finger positions for better interaction feedback
+            grab_state['last_pinch_center'] = pinch_center
+            grab_state['last_thumb_pos'] = thumb_pos
+            grab_state['last_index_pos'] = index_pos
+            
             return True
         
         return False
@@ -701,8 +746,12 @@ class ARHandController:
                 color = (0, 255, 0)  # Green for successful pinch
                 if hand_idx in self.grab_states:
                     obj = self.grab_states[hand_idx]['object']
-                    status = f"GRABBED ✓ (Size: {int(obj.size)})"
-                    color = (255, 255, 0)  # Yellow for grabbed
+                    status = f"2D GRABBED ✓ (Size: {int(obj.size)})"
+                    color = (255, 255, 0)  # Yellow for grabbed 2D
+                elif hand_idx in self.grab_states_3d:
+                    obj_3d = self.grab_states_3d[hand_idx]['object']
+                    status = f"3D GRABBED ✓ (Scale: {obj_3d.scale:.1f})"
+                    color = (0, 255, 255)  # Cyan for grabbed 3D
             elif is_pinching:
                 status = "PINCHING..."
                 color = (0, 255, 255)  # Cyan for detecting
