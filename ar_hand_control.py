@@ -18,8 +18,8 @@ class VirtualObject:
         self.original_size = size
         self.color = color
         self.shape = shape
-        self.is_grabbed = False
-        self.grabbed_by_hand = None
+        self.is_grabbed = 0  # 0 = not grabbed, 1 = grabbed with 1 hand, 2 = grabbed with 2 hands
+        self.grabbed_by_hand = []  # List of hand indices that are grabbing this object
         self.z_depth = 0.0 
         
     def draw(self, frame: np.ndarray) -> np.ndarray:
@@ -33,8 +33,11 @@ class VirtualObject:
                 color = tuple(int(c * alpha) for c in self.color)
                 cv2.circle(frame, center, i, color, -1)
                 
-            if self.is_grabbed:
-                cv2.circle(frame, center, radius + 5, (255, 255, 255), 3)
+            # Draw grab indicator based on grab state
+            if self.is_grabbed == 1:
+                cv2.circle(frame, center, radius + 5, (255, 255, 255), 3)  # White ring for 1 hand
+            elif self.is_grabbed == 2:
+                cv2.circle(frame, center, radius + 5, (255, 255, 0), 5)  # Yellow ring for 2 hands
                 
         return frame
     
@@ -297,7 +300,7 @@ class ARHandController:
         print("Gestures:")
         print("- Pinch (thumb + index) near object: Grab object")
         print("- Move hand while pinching: Move object (improved 3D tracking!)")
-        print("- Pinch and spread: Scale object")
+        print("- Grab object with TWO hands and move apart/closer: Scale object")
         print("- Two hands: Rotate 3D objects")
         print("- 3D objects now follow pinch point more accurately")
         print("Controls:")
@@ -330,6 +333,9 @@ class ARHandController:
         
         # Process interactions
         self._process_interactions(hands_info)
+        
+        # Store hands_info for scaling calculations
+        self.current_hands_info = hands_info
         
         # Draw 2D objects
         if self.show_2d_objects:
@@ -465,15 +471,45 @@ class ARHandController:
                 # Release any grabbed 2D object
                 if hand_idx in self.grab_states:
                     obj = self.grab_states[hand_idx]['object']
-                    obj.is_grabbed = False
-                    obj.grabbed_by_hand = None
+                    # Remove this hand from the grabbed_by_hand list
+                    if hand_idx in obj.grabbed_by_hand:
+                        obj.grabbed_by_hand.remove(hand_idx)
+                    # Update grab state based on remaining hands
+                    obj.is_grabbed = len(obj.grabbed_by_hand)
+                    
+                    # Reset scaling state if transitioning from two-hand to one-hand or no hands
+                    if obj.is_grabbed < 2:
+                        # Clear two-hand scaling state from all hands grabbing this object
+                        for other_hand_idx in obj.grabbed_by_hand:
+                            if other_hand_idx in self.grab_states:
+                                other_hand_state = self.grab_states[other_hand_idx]
+                                if 'initial_two_hand_distance' in other_hand_state:
+                                    del other_hand_state['initial_two_hand_distance']
+                                if 'initial_size' in other_hand_state:
+                                    del other_hand_state['initial_size']
+                    
                     del self.grab_states[hand_idx]
                 
                 # Release any grabbed 3D object
                 if hand_idx in self.grab_states_3d:
                     obj_3d = self.grab_states_3d[hand_idx]['object']
-                    obj_3d.is_grabbed = False
-                    obj_3d.grabbed_by_hand = None
+                    # Remove this hand from the grabbed_by_hand list
+                    if hand_idx in obj_3d.grabbed_by_hand:
+                        obj_3d.grabbed_by_hand.remove(hand_idx)
+                    # Update grab state based on remaining hands
+                    obj_3d.is_grabbed = len(obj_3d.grabbed_by_hand)
+                    
+                    # Reset scaling state if transitioning from two-hand to one-hand or no hands
+                    if obj_3d.is_grabbed < 2:
+                        # Clear two-hand scaling state from all hands grabbing this object
+                        for other_hand_idx in obj_3d.grabbed_by_hand:
+                            if other_hand_idx in self.grab_states_3d:
+                                other_hand_state = self.grab_states_3d[other_hand_idx]
+                                if 'initial_two_hand_distance' in other_hand_state:
+                                    del other_hand_state['initial_two_hand_distance']
+                                if 'initial_scale' in other_hand_state:
+                                    del other_hand_state['initial_scale']
+                    
                     del self.grab_states_3d[hand_idx]
         
         # Handle two-hand rotation for 3D objects
@@ -485,8 +521,23 @@ class ARHandController:
         for hand_idx in self.grab_states:
             if hand_idx not in current_grabs:
                 obj = self.grab_states[hand_idx]['object']
-                obj.is_grabbed = False
-                obj.grabbed_by_hand = None
+                # Remove this hand from the grabbed_by_hand list
+                if hand_idx in obj.grabbed_by_hand:
+                    obj.grabbed_by_hand.remove(hand_idx)
+                # Update grab state based on remaining hands
+                obj.is_grabbed = len(obj.grabbed_by_hand)
+                
+                # Reset scaling state if transitioning from two-hand to one-hand or no hands
+                if obj.is_grabbed < 2:
+                    # Clear two-hand scaling state from all hands grabbing this object
+                    for other_hand_idx in obj.grabbed_by_hand:
+                        if other_hand_idx in self.grab_states:
+                            other_hand_state = self.grab_states[other_hand_idx]
+                            if 'initial_two_hand_distance' in other_hand_state:
+                                del other_hand_state['initial_two_hand_distance']
+                            if 'initial_size' in other_hand_state:
+                                del other_hand_state['initial_size']
+                
                 hands_to_remove.append(hand_idx)
         
         for hand_idx in hands_to_remove:
@@ -500,8 +551,23 @@ class ARHandController:
         for hand_idx in self.grab_states_3d:
             if hand_idx not in current_grabs_3d:
                 obj_3d = self.grab_states_3d[hand_idx]['object']
-                obj_3d.is_grabbed = False
-                obj_3d.grabbed_by_hand = None
+                # Remove this hand from the grabbed_by_hand list
+                if hand_idx in obj_3d.grabbed_by_hand:
+                    obj_3d.grabbed_by_hand.remove(hand_idx)
+                # Update grab state based on remaining hands
+                obj_3d.is_grabbed = len(obj_3d.grabbed_by_hand)
+                
+                # Reset scaling state if transitioning from two-hand to one-hand or no hands
+                if obj_3d.is_grabbed < 2:
+                    # Clear two-hand scaling state from all hands grabbing this object
+                    for other_hand_idx in obj_3d.grabbed_by_hand:
+                        if other_hand_idx in self.grab_states_3d:
+                            other_hand_state = self.grab_states_3d[other_hand_idx]
+                            if 'initial_two_hand_distance' in other_hand_state:
+                                del other_hand_state['initial_two_hand_distance']
+                            if 'initial_scale' in other_hand_state:
+                                del other_hand_state['initial_scale']
+                
                 hands_to_remove_3d.append(hand_idx)
         
         for hand_idx in hands_to_remove_3d:
@@ -510,13 +576,13 @@ class ARHandController:
         # Additional safety: release objects if no hands are detected
         if not hands_info:
             for obj in self.objects:
-                if obj.is_grabbed:
-                    obj.is_grabbed = False
-                    obj.grabbed_by_hand = None
+                if obj.is_grabbed > 0:
+                    obj.is_grabbed = 0
+                    obj.grabbed_by_hand = []
             for obj_3d in self.objects_3d:
-                if obj_3d.is_grabbed:
-                    obj_3d.is_grabbed = False
-                    obj_3d.grabbed_by_hand = None
+                if obj_3d.is_grabbed > 0:
+                    obj_3d.is_grabbed = 0
+                    obj_3d.grabbed_by_hand = []
             self.grab_states.clear()
             self.grab_states_3d.clear()
             self.pinch_states.clear()
@@ -532,7 +598,7 @@ class ARHandController:
             closest_distance = float('inf')
             
             for obj in self.objects:
-                if not obj.is_grabbed:
+                if obj.is_grabbed < 2:  # Allow grabbing if not already grabbed by 2 hands
                     # Use much larger grab area for easier grabbing
                     grab_radius = obj.size * 2.0  # Increased from 1.5 to 2.0
                     distance = math.sqrt((obj.x - pinch_center[0]) ** 2 + (obj.y - pinch_center[1]) ** 2)
@@ -541,8 +607,11 @@ class ARHandController:
                         closest_obj = obj
             
             if closest_obj:
-                closest_obj.is_grabbed = True
-                closest_obj.grabbed_by_hand = hand_idx
+                # Add this hand to the grabbed_by_hand list
+                if hand_idx not in closest_obj.grabbed_by_hand:
+                    closest_obj.grabbed_by_hand.append(hand_idx)
+                # Update grab state based on number of hands
+                closest_obj.is_grabbed = len(closest_obj.grabbed_by_hand)
                 self.grab_states[hand_idx] = {
                     'object': closest_obj,
                     'initial_pinch_distance': pinch_distance,
@@ -560,14 +629,99 @@ class ARHandController:
             target_y = pinch_center[1] - grab_state['grab_offset_y']
             obj.move_to(target_x, target_y)
             
-            # Scale object based on pinch distance change
-            initial_distance = grab_state['initial_pinch_distance']
-            scale_factor = pinch_distance / initial_distance if initial_distance > 0 else 1.0
+            # Only scale if object is grabbed by two hands
+            if obj.is_grabbed == 2:
+                self._handle_two_hand_scaling_2d(obj)
+    
+    def _handle_two_hand_scaling_2d(self, obj):
+        """Handle scaling when 2D object is grabbed by two hands"""
+        # Get the two hands that are grabbing this object
+        grabbing_hands = [hand_idx for hand_idx in obj.grabbed_by_hand if hand_idx in self.grab_states]
+        
+        if len(grabbing_hands) == 2:
+            hand1_idx, hand2_idx = grabbing_hands[0], grabbing_hands[1]
+            hand1_state = self.grab_states[hand1_idx]
+            hand2_state = self.grab_states[hand2_idx]
             
-            # Apply scaling with some smoothing
-            target_size = grab_state['initial_size'] * scale_factor
-            obj.size = obj.size * 0.8 + target_size * 0.2  # Smooth scaling
-            obj.size = max(20, min(150, obj.size))  # Clamp size
+            # Get current hand positions from the detector
+            hand1_info = None
+            hand2_info = None
+            
+            for hand_info in self.current_hands_info:
+                if hand_info['hand_idx'] == hand1_idx:
+                    hand1_info = hand_info
+                elif hand_info['hand_idx'] == hand2_idx:
+                    hand2_info = hand_info
+            
+            if hand1_info and hand2_info:
+                # Calculate current distance between the two hands using pinch centers
+                hand1_pos = hand1_info['pinch_center']
+                hand2_pos = hand2_info['pinch_center']
+                current_distance = math.sqrt((hand2_pos[0] - hand1_pos[0]) ** 2 + (hand2_pos[1] - hand1_pos[1]) ** 2)
+                
+                # Get initial distance when two-hand grab started
+                if 'initial_two_hand_distance' not in hand1_state:
+                    # Initialize the two-hand scaling
+                    hand1_state['initial_two_hand_distance'] = current_distance
+                    hand1_state['initial_size'] = obj.size
+                    hand2_state['initial_two_hand_distance'] = current_distance
+                    hand2_state['initial_size'] = obj.size
+                
+                initial_distance = hand1_state['initial_two_hand_distance']
+                
+                # Calculate scale factor based on distance change
+                if initial_distance > 0:
+                    scale_factor = current_distance / initial_distance
+                    target_size = hand1_state['initial_size'] * scale_factor
+                    
+                    # Apply scaling with smoothing
+                    obj.size = obj.size * 0.7 + target_size * 0.3  # Smooth scaling
+                    obj.size = max(20, min(200, obj.size))  # Clamp size
+    
+    def _handle_two_hand_scaling_3d(self, obj_3d):
+        """Handle scaling when 3D object is grabbed by two hands"""
+        # Get the two hands that are grabbing this object
+        grabbing_hands = [hand_idx for hand_idx in obj_3d.grabbed_by_hand if hand_idx in self.grab_states_3d]
+        
+        if len(grabbing_hands) == 2:
+            hand1_idx, hand2_idx = grabbing_hands[0], grabbing_hands[1]
+            hand1_state = self.grab_states_3d[hand1_idx]
+            hand2_state = self.grab_states_3d[hand2_idx]
+            
+            # Get current hand positions from the detector
+            hand1_info = None
+            hand2_info = None
+            
+            for hand_info in self.current_hands_info:
+                if hand_info['hand_idx'] == hand1_idx:
+                    hand1_info = hand_info
+                elif hand_info['hand_idx'] == hand2_idx:
+                    hand2_info = hand_info
+            
+            if hand1_info and hand2_info:
+                # Calculate current distance between the two hands using pinch centers
+                hand1_pos = hand1_info['pinch_center']
+                hand2_pos = hand2_info['pinch_center']
+                current_distance = math.sqrt((hand2_pos[0] - hand1_pos[0]) ** 2 + (hand2_pos[1] - hand1_pos[1]) ** 2)
+                
+                # Get initial distance when two-hand grab started
+                if 'initial_two_hand_distance' not in hand1_state:
+                    # Initialize the two-hand scaling
+                    hand1_state['initial_two_hand_distance'] = current_distance
+                    hand1_state['initial_scale'] = obj_3d.scale
+                    hand2_state['initial_two_hand_distance'] = current_distance
+                    hand2_state['initial_scale'] = obj_3d.scale
+                
+                initial_distance = hand1_state['initial_two_hand_distance']
+                
+                # Calculate scale factor based on distance change
+                if initial_distance > 0:
+                    scale_factor = current_distance / initial_distance
+                    target_scale = hand1_state['initial_scale'] * scale_factor
+                    
+                    # Apply scaling with smoothing
+                    obj_3d.scale = obj_3d.scale * 0.7 + target_scale * 0.3  # Smooth scaling
+                    obj_3d.scale = max(0.1, min(5.0, obj_3d.scale))  # Clamp scale
     
     def _handle_pinch_interaction_3d(self, hand_info: dict, hand_idx: int) -> bool:
         """Handle pinch gesture interaction with 3D objects with improved tracking"""
@@ -582,7 +736,7 @@ class ARHandController:
             closest_distance = float('inf')
             
             for obj_3d in self.objects_3d:
-                if not obj_3d.is_grabbed and obj_3d.is_point_inside(pinch_center[0], pinch_center[1], self.renderer_3d):
+                if obj_3d.is_grabbed < 2 and obj_3d.is_point_inside(pinch_center[0], pinch_center[1], self.renderer_3d):
                     # For 3D objects, we use a simpler distance check
                     distance = 0  # If point is inside, it's the closest
                     if distance < closest_distance:
@@ -590,8 +744,11 @@ class ARHandController:
                         closest_obj_3d = obj_3d
             
             if closest_obj_3d:
-                closest_obj_3d.is_grabbed = True
-                closest_obj_3d.grabbed_by_hand = hand_idx
+                # Add this hand to the grabbed_by_hand list
+                if hand_idx not in closest_obj_3d.grabbed_by_hand:
+                    closest_obj_3d.grabbed_by_hand.append(hand_idx)
+                # Update grab state based on number of hands
+                closest_obj_3d.is_grabbed = len(closest_obj_3d.grabbed_by_hand)
                 
                 # Get the current 3D object's screen position for calculating grab offset
                 current_screen_pos = closest_obj_3d.get_screen_position(self.renderer_3d)
@@ -606,8 +763,8 @@ class ARHandController:
                     'last_pinch_center': pinch_center,
                     'last_thumb_pos': thumb_pos,
                     'last_index_pos': index_pos,
-                    'smoothing_factor': 0.3,  # For smooth movement (lower = more responsive)
-                    'movement_sensitivity': 0.005  # Controls how much screen movement affects 3D position
+                    'smoothing_factor': 0.1,  # For smooth movement (lower = more responsive)
+                    'movement_sensitivity': 0.015  # Controls how much screen movement affects 3D position (increased for better responsiveness)
                 }
                 return True
         else:
@@ -615,52 +772,29 @@ class ARHandController:
             grab_state = self.grab_states_3d[hand_idx]
             obj_3d = grab_state['object']
             
-            # Calculate movement based on pinch center change with grab offset compensation
-            target_x = pinch_center[0] - grab_state['grab_offset_x']
-            target_y = pinch_center[1] - grab_state['grab_offset_y']
+            # Only move the object if the hand has actually moved
+            last_pinch_center = grab_state['last_pinch_center']
+            pinch_delta_x = pinch_center[0] - last_pinch_center[0]
+            pinch_delta_y = pinch_center[1] - last_pinch_center[1]
             
-            # Get current screen position of the 3D object
-            current_screen_pos = obj_3d.get_screen_position(self.renderer_3d)
+            # Calculate movement magnitude to determine if hand actually moved
+            movement_magnitude = math.sqrt(pinch_delta_x**2 + pinch_delta_y**2)
+            movement_threshold = 0.5  # pixels - minimum movement to trigger object movement (reduced for better responsiveness)
             
-            if current_screen_pos:
-                # Calculate screen space movement
-                screen_delta_x = target_x - current_screen_pos[0]
-                screen_delta_y = target_y - current_screen_pos[1]
-                
+            if movement_magnitude > movement_threshold:
                 # Convert screen movement to world space movement
                 sensitivity = grab_state['movement_sensitivity']
-                world_delta_x = screen_delta_x * sensitivity
-                world_delta_y = -screen_delta_y * sensitivity  # Invert Y for correct direction
+                world_delta_x = pinch_delta_x * sensitivity
+                world_delta_y = -pinch_delta_y * sensitivity  # Invert Y for correct direction
                 
-                # Choose between smooth and direct movement based on distance
-                movement_threshold = 5.0  # pixels
-                screen_movement_magnitude = math.sqrt(screen_delta_x**2 + screen_delta_y**2)
-                
-                if screen_movement_magnitude > movement_threshold:
-                    # For larger movements, use direct tracking for responsiveness
-                    obj_3d.x += world_delta_x
-                    obj_3d.y += world_delta_y
-                else:
-                    # For smaller movements, use smoothing to reduce jitter
-                    smoothing = grab_state['smoothing_factor']
-                    new_x = obj_3d.x + world_delta_x * (1 - smoothing) + world_delta_x * smoothing
-                    new_y = obj_3d.y + world_delta_y * (1 - smoothing) + world_delta_y * smoothing
-                    
-                    # Update 3D object position
-                    obj_3d.x = new_x
-                    obj_3d.y = new_y
+                # Apply movement with smoothing
+                smoothing = grab_state['smoothing_factor']
+                obj_3d.x += world_delta_x * (1 - smoothing)
+                obj_3d.y += world_delta_y * (1 - smoothing)
             
-            # Enhanced scaling with better control
-            initial_distance = grab_state['initial_pinch_distance']
-            if initial_distance > 0:
-                scale_factor = pinch_distance / initial_distance
-                # Limit scaling range and add deadzone for stability
-                if abs(scale_factor - 1.0) > 0.1:  # Deadzone to prevent jittery scaling
-                    # Smooth scaling transition
-                    current_scale_factor = obj_3d.scale / grab_state['initial_scale']
-                    new_scale_factor = current_scale_factor * 0.9 + scale_factor * 0.1
-                    # Apply the scale factor relative to original scale
-                    obj_3d.scale_object(new_scale_factor)
+            # Only scale if object is grabbed by two hands
+            if obj_3d.is_grabbed == 2:
+                self._handle_two_hand_scaling_3d(obj_3d)
             
             # Track finger positions for better interaction feedback
             grab_state['last_pinch_center'] = pinch_center
@@ -716,6 +850,7 @@ class ARHandController:
         # Draw instructions
         instructions = [
             "AR Hand Control - Pinch to grab, move, and scale objects",
+            "Two hands required for scaling - move apart/closer to scale",
             "Q: Quit | R: Reset | C: Add Object",
             f"Objects: {len(self.objects)} | Hands: {len(hands_info)}"
         ]
@@ -746,11 +881,15 @@ class ARHandController:
                 color = (0, 255, 0)  # Green for successful pinch
                 if hand_idx in self.grab_states:
                     obj = self.grab_states[hand_idx]['object']
-                    status = f"2D GRABBED ✓ (Size: {int(obj.size)})"
+                    grab_state_text = ["Not grabbed", "1 hand", "2 hands"][obj.is_grabbed]
+                    scaling_text = " (SCALING)" if obj.is_grabbed == 2 else ""
+                    status = f"2D GRABBED ✓ ({grab_state_text}{scaling_text}, Size: {int(obj.size)})"
                     color = (255, 255, 0)  # Yellow for grabbed 2D
                 elif hand_idx in self.grab_states_3d:
                     obj_3d = self.grab_states_3d[hand_idx]['object']
-                    status = f"3D GRABBED ✓ (Scale: {obj_3d.scale:.1f})"
+                    grab_state_text = ["Not grabbed", "1 hand", "2 hands"][obj_3d.is_grabbed]
+                    scaling_text = " (SCALING)" if obj_3d.is_grabbed == 2 else ""
+                    status = f"3D GRABBED ✓ ({grab_state_text}{scaling_text}, Scale: {obj_3d.scale:.1f})"
                     color = (0, 255, 255)  # Cyan for grabbed 3D
             elif is_pinching:
                 status = "PINCHING..."

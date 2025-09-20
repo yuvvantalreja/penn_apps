@@ -24,8 +24,8 @@ class VirtualObject3D:
         self.rotation_z = 0.0
         
         # Interaction state
-        self.is_grabbed = False
-        self.grabbed_by_hand = None
+        self.is_grabbed = 0  # 0 = not grabbed, 1 = grabbed with 1 hand, 2 = grabbed with 2 hands
+        self.grabbed_by_hand = []  # List of hand indices that are grabbing this object
         self.highlighted = False  # For object selection
         
         # Auto-rotation for demo purposes
@@ -176,8 +176,8 @@ class VirtualObject3D:
         screen_x = (projected_center[0, 0] + 1) * renderer.width / 2
         screen_y = (1 - projected_center[0, 1]) * renderer.height / 2
         
-        # Use scaled bounding box for hit detection
-        hit_radius = max(30, self.bounding_box_size * 50 * self.scale)  # Adjust as needed
+        # Use scaled bounding box for hit detection (moderately increased for easier grabbing)
+        hit_radius = max(45, self.bounding_box_size * 65 * self.scale)  # Balanced grab area
         distance = math.sqrt((x - screen_x) ** 2 + (y - screen_y) ** 2)
         
         return distance <= hit_radius
