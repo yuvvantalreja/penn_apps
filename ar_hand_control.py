@@ -4,6 +4,7 @@ import numpy as np
 import math
 from typing import List, Tuple, Optional
 import time
+#Made some changes to pinching 
 
 class VirtualObject:
     """Represents a virtual object that can be manipulated in AR space"""
