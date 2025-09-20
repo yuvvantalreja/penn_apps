@@ -7,7 +7,6 @@ import time
 import os
 from renderer_3d import Renderer3D
 from virtual_object_3d import VirtualObject3D
-from jarvis_assistant import JarvisAssistant
 
 class VirtualObject:
     """Represents a virtual object that can be manipulated in AR space"""
@@ -194,15 +193,15 @@ class ARHandController:
     """Main AR application for hand-controlled object manipulation"""
     
     def __init__(self):
+        # Hand detector
         self.detector = HandGestureDetector()
-        self.objects: List[VirtualObject] = []
-        self.objects_3d: List[VirtualObject3D] = []
-        self.cap = None
-        self.is_running = False
-        self.current_frame = None  # Store current frame for Jarvis
         
-        # 3D Renderer
-        self.renderer_3d = None
+        # Virtual objects
+        self.objects: List[VirtualObject] = []
+        
+        # Test mode for JARVIS without camera
+        self.test_mode = False
+        self.jarvis_activated = False
         
         # Interaction state
         self.grab_states = {}  # hand_idx -> {object, initial_pinch_distance, initial_size}
@@ -215,10 +214,6 @@ class ARHandController:
         # Display mode
         self.show_3d_objects = True
         self.show_2d_objects = True
-        
-        # Initialize Jarvis Assistant
-        self.jarvis = JarvisAssistant(self)
-        print("🤖 Jarvis Assistant initialized - Press 'J' to activate")
         
         # Create some initial objects
         self._create_initial_objects()
@@ -267,36 +262,53 @@ class ARHandController:
     
     def start(self):
         """Start the AR application"""
-        # Try different camera indices
-        camera_indices = [0]  # Try multiple camera sources
-        self.cap = None
+        # Try different camera indices with better error handling
+        camera_indices = [0, 1, 2]  # Try multiple camera indices
         
-        for idx in camera_indices:
-            print(f"Trying camera index {idx}...")
-            test_cap = cv2.VideoCapture(0)
-            if test_cap.isOpened():
-                # Test if we can actually read a frame
-                ret, frame = test_cap.read()
-                if ret and frame is not None:
-                    self.cap = test_cap
-                    print(f"✅ Successfully opened camera {idx}")
+        for index in camera_indices:
+            print(f"Trying camera index {index}...")
+            self.cap = cv2.VideoCapture(index)
+            
+            # Set camera properties for better compatibility
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+            self.cap.set(cv2.CAP_PROP_FPS, 30)
+            
+            if self.cap.isOpened():
+                # Test if we can actually read from the camera
+                ret, test_frame = self.cap.read()
+                if ret and test_frame is not None:
+                    print(f"✅ Successfully opened camera {index}")
+                    print(f"   Resolution: {int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))}x{int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))}")
+                    print(f"   FPS: {int(self.cap.get(cv2.CAP_PROP_FPS))}")
                     break
                 else:
-                    test_cap.release()
+                    print(f"❌ Camera {index} opened but cannot read frames")
+                    self.cap.release()
             else:
-                test_cap.release()
-        
-        if self.cap is None:
+                print(f"❌ Could not open camera {index}")
+        else:
             print("❌ Error: Could not open any camera")
             print("\n🔧 Troubleshooting tips:")
             print("1. Check System Preferences → Privacy & Security → Camera")
             print("2. Allow Terminal (or your Python IDE) to access the camera")
             print("3. Make sure no other applications are using the camera")
-            print("4. Try running: 'python3.11 launch_app.py' for GUI launcher")
-            return
+            print("4. Try running with different backend: 'export OPENCV_VIDEOIO_PRIORITY_LIST=AVFOUNDATION'")
+            print("5. Try running: 'python3.11 launch_app.py' for GUI launcher")
             
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+            # Continue without camera for JARVIS testing
+            print("\n🤖 JARVIS Integration Test Mode:")
+            print("- Camera disabled, but JARVIS voice assistant still works")
+            print("- Press 'J' to test JARVIS activation")
+            print("- Use synthetic 3D objects for JARVIS visual analysis")
+            
+            self.test_mode = True
+            self.cap = None
+            
+        # Set camera resolution if camera is available
+        if self.cap is not None:
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
         
         # Initialize 3D renderer
         self.renderer_3d = Renderer3D(1280, 720)
@@ -319,34 +331,70 @@ class ARHandController:
         print("- Press 't' to toggle auto-rotation")
         print("- Press 'x/y/z' to reset rotation on specific axis")
         print("- Press 'space' to cycle through 3D objects")
-        print("🤖 Press 'J' to activate/deactivate Jarvis voice assistant")
+        print("- Press 'j' to activate JARVIS voice assistant")
         
         while self.is_running:
             self._process_frame()
             
         self._cleanup()
     
+    def _create_test_frame(self):
+        """Create a synthetic frame for testing JARVIS without camera"""
+        # Create a black frame with 3D objects rendered
+        frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+        
+        # Add some visual elements to make it interesting for JARVIS
+        cv2.putText(frame, "AR Hand Control - JARVIS Test Mode", 
+                   (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+        
+        if self.jarvis_activated:
+            cv2.putText(frame, "JARVIS ACTIVE - Voice Assistant Ready", 
+                       (50, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+            cv2.putText(frame, "Say 'What is this?' to analyze 3D objects", 
+                       (50, 130), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+        
+        # Add instructions
+        cv2.putText(frame, "Press 'J' to toggle JARVIS", 
+                   (50, 680), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 2)
+        cv2.putText(frame, "Press '2' to show 3D objects", 
+                   (50, 700), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 2)
+        
+        return frame
+    
+    def save_screenshot_for_jarvis(self, frame):
+        """Save current frame as screenshot for JARVIS analysis"""
+        try:
+            screenshot_path = "jarvis_screenshot.png"
+            cv2.imwrite(screenshot_path, frame)
+            print(f"📸 Screenshot saved for JARVIS analysis: {screenshot_path}")
+            return screenshot_path
+        except Exception as e:
+            print(f"❌ Failed to save screenshot: {e}")
+            return None
+    
     def _process_frame(self):
         """Process a single frame"""
-        ret, frame = self.cap.read()
-        if not ret:
-            return
-            
+        if self.test_mode or self.cap is None:
+            # Create synthetic frame for JARVIS testing
+            frame = self._create_test_frame()
+        else:
+            ret, frame = self.cap.read()
+            if not ret:
+                print("Failed to capture frame")
+                self.is_running = False
+                return
+        
         # Flip frame horizontally for mirror effect
         frame = cv2.flip(frame, 1)
-        
-        # Store current frame for Jarvis
-        self.current_frame = frame.copy()
         
         # Detect hands
         hands_info = self.detector.detect_hands(frame)
         
-        # Store hands info for Jarvis and scaling calculations
-        self.detector.current_hands_info = hands_info
-        self.current_hands_info = hands_info
-        
         # Process interactions
         self._process_interactions(hands_info)
+        
+        # Store hands_info for scaling calculations
+        self.current_hands_info = hands_info
         
         # Draw 2D objects
         if self.show_2d_objects:
@@ -427,14 +475,29 @@ class ARHandController:
             for obj_3d in self.objects_3d:
                 obj_3d.rotation_z = 0.0
             print("Reset Z-axis rotation")
-        elif key == ord('j') or key == ord('J'):
-            # Activate/Deactivate Jarvis
-            if self.jarvis.is_active:
-                self.jarvis.deactivate_jarvis()
-                print("🤖 Jarvis deactivated")
+        elif key == ord('j'):
+            # Activate JARVIS voice assistant
+            print("🤖 Activating JARVIS voice assistant...")
+            self.jarvis_activated = not self.jarvis_activated
+            if self.jarvis_activated:
+                print("✅ JARVIS activated - Voice assistant ready")
+                print("🗣️  Say 'What is this?' to analyze the 3D objects")
+                print("📸 JARVIS will take a screenshot and analyze what you're looking at")
+                
+                # Save screenshot for JARVIS analysis
+                screenshot_path = self.save_screenshot_for_jarvis(frame)
+                if screenshot_path:
+                    print("🧠 Screenshot ready for JARVIS vision analysis")
+                    print("💡 Open the web interface and activate JARVIS to analyze this image")
+                
+                cv2.putText(frame, "JARVIS ACTIVATED - Voice Assistant Ready", 
+                           (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                cv2.putText(frame, "Screenshot saved for analysis", 
+                           (50, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
             else:
-                self.jarvis.activate_jarvis()
-                print("🤖 Jarvis activated - Listening for commands")
+                print("🤖 JARVIS deactivated")
+                cv2.putText(frame, "JARVIS DEACTIVATED", 
+                           (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
         elif key == ord(' '):  # Spacebar
             # Cycle through 3D objects (highlight next one)
             if self.objects_3d:

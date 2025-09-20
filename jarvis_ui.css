@@ -1,0 +1,216 @@
+/* JARVIS Voice Assistant UI Styles */
+
+.jarvis-container {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    background: rgba(0, 0, 0, 0.8);
+    padding: 15px;
+    border-radius: 10px;
+    border: 2px solid #00a8ff;
+    backdrop-filter: blur(10px);
+    min-width: 200px;
+}
+
+.jarvis-indicator {
+    width: 60px;
+    height: 60px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 30% 30%, #333 0%, #111 70%);
+    border: 3px solid #444;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    transition: all 0.3s ease;
+}
+
+.jarvis-indicator::before {
+    content: '🤖';
+    font-size: 24px;
+    transition: all 0.3s ease;
+}
+
+.jarvis-indicator.active {
+    background: radial-gradient(circle at 30% 30%, #00a8ff 0%, #0078d4 30%, #005a9e 60%, #003d6b 85%, #002a4a 100%);
+    border-color: #00a8ff;
+    box-shadow: 0 0 20px rgba(0, 168, 255, 0.5);
+    animation: jarvis-pulse 2s infinite;
+}
+
+.jarvis-indicator.active::before {
+    content: '👁️';
+    color: white;
+    text-shadow: 0 0 10px rgba(255, 255, 255, 0.8);
+}
+
+.jarvis-indicator.speaking {
+    background: radial-gradient(circle at 30% 30%, #00ff88 0%, #00cc6a 30%, #009951 60%, #006638 85%, #003d21 100%);
+    border-color: #00ff88;
+    box-shadow: 0 0 20px rgba(0, 255, 136, 0.5);
+    animation: jarvis-speaking 0.5s infinite alternate;
+}
+
+.jarvis-indicator.speaking::before {
+    content: '🗣️';
+    color: white;
+}
+
+.jarvis-indicator.analyzing {
+    background: radial-gradient(circle at 30% 30%, #ff6b35 0%, #e55a2b 30%, #cc4921 60%, #b33817 85%, #99270d 100%);
+    border-color: #ff6b35;
+    box-shadow: 0 0 20px rgba(255, 107, 53, 0.5);
+    animation: jarvis-analyzing 1s infinite;
+}
+
+.jarvis-indicator.analyzing::before {
+    content: '🔍';
+    color: white;
+}
+
+@keyframes jarvis-pulse {
+    0%, 100% {
+        transform: scale(1);
+        box-shadow: 0 0 20px rgba(0, 168, 255, 0.5);
+    }
+    50% {
+        transform: scale(1.05);
+        box-shadow: 0 0 30px rgba(0, 168, 255, 0.8);
+    }
+}
+
+@keyframes jarvis-speaking {
+    0% {
+        transform: scale(1);
+    }
+    100% {
+        transform: scale(1.1);
+    }
+}
+
+@keyframes jarvis-analyzing {
+    0% {
+        transform: rotate(0deg) scale(1);
+    }
+    25% {
+        transform: rotate(90deg) scale(1.05);
+    }
+    50% {
+        transform: rotate(180deg) scale(1);
+    }
+    75% {
+        transform: rotate(270deg) scale(1.05);
+    }
+    100% {
+        transform: rotate(360deg) scale(1);
+    }
+}
+
+.jarvis-status {
+    color: #00a8ff;
+    font-family: 'Courier New', monospace;
+    font-size: 12px;
+    text-align: center;
+    font-weight: bold;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    text-shadow: 0 0 5px rgba(0, 168, 255, 0.5);
+    min-height: 14px;
+}
+
+.jarvis-controls {
+    display: flex;
+    gap: 5px;
+    margin-top: 5px;
+}
+
+.jarvis-btn {
+    background: rgba(0, 168, 255, 0.2);
+    border: 1px solid #00a8ff;
+    color: #00a8ff;
+    padding: 5px 10px;
+    border-radius: 5px;
+    font-size: 10px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    font-family: 'Courier New', monospace;
+    text-transform: uppercase;
+}
+
+.jarvis-btn:hover {
+    background: rgba(0, 168, 255, 0.4);
+    box-shadow: 0 0 10px rgba(0, 168, 255, 0.3);
+}
+
+.jarvis-btn:active {
+    transform: scale(0.95);
+}
+
+.jarvis-help {
+    position: absolute;
+    bottom: -40px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(0, 0, 0, 0.9);
+    color: #00a8ff;
+    padding: 5px 10px;
+    border-radius: 5px;
+    font-size: 10px;
+    font-family: 'Courier New', monospace;
+    white-space: nowrap;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+    pointer-events: none;
+}
+
+.jarvis-container:hover .jarvis-help {
+    opacity: 1;
+}
+
+/* Integration with existing AR controls */
+.ar-controls {
+    position: fixed;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 999;
+}
+
+/* Ensure JARVIS doesn't interfere with existing UI */
+.jarvis-container.minimized {
+    padding: 10px;
+    min-width: auto;
+}
+
+.jarvis-container.minimized .jarvis-status,
+.jarvis-container.minimized .jarvis-controls {
+    display: none;
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+    .jarvis-container {
+        top: 10px;
+        right: 10px;
+        padding: 10px;
+        min-width: 150px;
+    }
+    
+    .jarvis-indicator {
+        width: 50px;
+        height: 50px;
+    }
+    
+    .jarvis-indicator::before {
+        font-size: 20px;
+    }
+    
+    .jarvis-status {
+        font-size: 10px;
+    }
+}
