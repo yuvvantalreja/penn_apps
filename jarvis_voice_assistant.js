@@ -27,6 +27,10 @@ class JarvisVoiceAssistant {
         this.speechRecognition = null;
         this.isWakeWordMode = true;
         
+        // Visual context polling
+        this.lastContextUpdate = 0;
+        this.contextPollingInterval = null;
+        
         console.log('🤖 Jarvis Voice Assistant initialized');
     }
     
@@ -232,7 +236,24 @@ class JarvisVoiceAssistant {
     
     async startJarvisSession() {
         try {
-            const jarvisSystemPrompt = `Your name is Jarvis, I will give you an image, tell me the augmented reality object classification in the image. Talk to me like a professional assistant, and be direct and informative. If you don't know exactly what something is, say you don't know.`;
+            const jarvisSystemPrompt = `You are JARVIS, Tony Stark's AI assistant from Iron Man. You are sophisticated, helpful, and speak with British elegance and wit.
+
+PERSONALITY:
+- Speak with refined British accent and vocabulary
+- Be helpful but occasionally witty or sarcastic
+- Address the user as "Sir" or "Mr. Stark" 
+- Show intelligence and capability in your responses
+- Keep responses concise but informative
+
+CAPABILITIES:
+- You can analyze images and identify objects, components, and details
+- You have access to the current visual context from the AR application
+- You can provide technical analysis of 3D models, CAD components, and engineering elements
+
+CONTEXT:
+You will receive visual context about what the user is currently viewing in their AR application. Use this context to answer their questions intelligently and provide relevant information about the objects, models, or components they're working with.
+
+Always be ready to help with technical analysis, object identification, and provide insights about what they're viewing.`;
 
             const setupMessage = {
                 setup: {
@@ -259,21 +280,24 @@ class JarvisVoiceAssistant {
             console.log('📝 Sending JARVIS session setup to Gemini Live...');
             this.websocket.send(JSON.stringify(setupMessage));
             
-            // Send initial greeting trigger
-            setTimeout(() => {
+            // Send initial greeting trigger with visual context
+            setTimeout(async () => {
                 if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
+                    // Get visual context first
+                    const visualContext = await this.getVisualContext();
+                    
                     const greetingTrigger = {
                         clientContent: {
                             turns: [{
                                 role: "user",
-                                parts: [{ text: "Hello JARVIS, I need your assistance." }]
+                                parts: [{ text: `Hello JARVIS, I need your assistance. ${visualContext}` }]
                             }],
                             turnComplete: true
                         }
                     };
                     
                     this.websocket.send(JSON.stringify(greetingTrigger));
-                    console.log('✅ JARVIS greeting triggered');
+                    console.log('✅ JARVIS greeting triggered with visual context');
                 }
             }, 100);
             
@@ -281,6 +305,9 @@ class JarvisVoiceAssistant {
                 startTime: Date.now(),
                 type: 'jarvis_assistant'
             };
+            
+            // Start context polling to check for object grab notifications
+            this.startContextPolling();
             
         } catch (error) {
             console.error('❌ Failed to start JARVIS session:', error);
@@ -545,6 +572,111 @@ class JarvisVoiceAssistant {
         }
     }
     
+    async updateVisualContextForConversation() {
+        try {
+            console.log('🔄 Updating visual context for ongoing conversation...');
+            
+            // Get current visual context
+            const visualContext = await this.getVisualContext();
+            
+            // Send visual context update to JARVIS as part of the conversation
+            if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
+                const contextUpdate = {
+                    clientContent: {
+                        turns: [{
+                            role: "user",
+                            parts: [{ text: `CONTEXT UPDATE: ${visualContext}` }]
+                        }],
+                        turnComplete: true
+                    }
+                };
+                
+                this.websocket.send(JSON.stringify(contextUpdate));
+                console.log('✅ Visual context updated in conversation');
+            }
+            
+        } catch (error) {
+            console.error('❌ Failed to update visual context for conversation:', error);
+        }
+    }
+    
+    // Method to be called when objects are grabbed in the AR application
+    async onObjectGrabbed() {
+        try {
+            console.log('🎯 Object grabbed - updating JARVIS visual context...');
+            
+            // Wait a moment for the screenshot to be updated
+            await new Promise(resolve => setTimeout(resolve, 500));
+            
+            // Update visual context in the conversation
+            await this.updateVisualContextForConversation();
+            
+        } catch (error) {
+            console.error('❌ Failed to update context on object grab:', error);
+        }
+    }
+    
+    startContextPolling() {
+        try {
+            console.log('🔄 Starting visual context polling...');
+            
+            // Poll every 2 seconds to check for object grab notifications
+            this.contextPollingInterval = setInterval(async () => {
+                try {
+                    await this.checkForObjectGrabNotifications();
+                } catch (error) {
+                    console.error('❌ Context polling error:', error);
+                }
+            }, 2000);
+            
+        } catch (error) {
+            console.error('❌ Failed to start context polling:', error);
+        }
+    }
+    
+    stopContextPolling() {
+        if (this.contextPollingInterval) {
+            clearInterval(this.contextPollingInterval);
+            this.contextPollingInterval = null;
+            console.log('⏹️ Visual context polling stopped');
+        }
+    }
+    
+    async checkForObjectGrabNotifications() {
+        try {
+            // Get API base URL
+            const apiBaseUrl = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' ? 
+                'http://localhost:5001' : 'https://pitchperfect2-api-373812504656.asia-southeast1.run.app';
+            
+            // Check if there's a recent screenshot update
+            const response = await fetch(`${apiBaseUrl}/api/jarvis/analyze-saved-screenshot`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            });
+            
+            if (response.ok) {
+                const data = await response.json();
+                if (data.status === 'success' && data.analysis) {
+                    // Check if this is a new analysis (simple timestamp check)
+                    const currentTime = Date.now();
+                    if (currentTime - this.lastContextUpdate > 3000) { // 3 seconds cooldown
+                        console.log('🔄 New visual context detected, updating JARVIS...');
+                        await this.updateVisualContextForConversation();
+                        this.lastContextUpdate = currentTime;
+                    }
+                }
+            }
+            
+        } catch (error) {
+            // Silently handle errors to avoid spam
+            if (error.message && !error.message.includes('404')) {
+                console.error('❌ Context check error:', error);
+            }
+        }
+    }
+    
     async captureScreenshot() {
         try {
             // Try to capture from canvas first (for 3D renders)
@@ -637,6 +769,56 @@ class JarvisVoiceAssistant {
         } catch (error) {
             console.error('❌ Failed to analyze saved screenshot:', error);
             return null;
+        }
+    }
+    
+    async getVisualContext() {
+        try {
+            console.log('👁️ Getting visual context for JARVIS...');
+            
+            // Analyze the current screenshot
+            const analysis = await this.analyzeSavedScreenshot();
+            
+            if (analysis) {
+                return `VISUAL CONTEXT: ${analysis}`;
+            } else {
+                return "VISUAL CONTEXT: No current visual information available. The user may need to interact with objects in the AR application first.";
+            }
+            
+        } catch (error) {
+            console.error('❌ Failed to get visual context:', error);
+            return "VISUAL CONTEXT: Unable to analyze current visual information at this time.";
+        }
+    }
+    
+    async updateVisualContext() {
+        try {
+            if (!this.websocket || this.websocket.readyState !== WebSocket.OPEN) {
+                console.log('⚠️ JARVIS not connected, cannot update visual context');
+                return;
+            }
+            
+            console.log('🔄 Updating visual context for JARVIS...');
+            
+            // Get current visual context
+            const visualContext = await this.getVisualContext();
+            
+            // Send visual context update to JARVIS
+            const contextUpdate = {
+                clientContent: {
+                    turns: [{
+                        role: "user",
+                        parts: [{ text: `UPDATE: ${visualContext}` }]
+                    }],
+                    turnComplete: true
+                }
+            };
+            
+            this.websocket.send(JSON.stringify(contextUpdate));
+            console.log('✅ Visual context updated for JARVIS');
+            
+        } catch (error) {
+            console.error('❌ Failed to update visual context:', error);
         }
     }
 
@@ -820,6 +1002,9 @@ Be specific about what you observe and maintain JARVIS's characteristic wit and 
                 this.websocket.close();
             }
             this.isConnected = false;
+            
+            // Stop context polling
+            this.stopContextPolling();
             
             // Restart wake word detection
             this.isWakeWordMode = true;

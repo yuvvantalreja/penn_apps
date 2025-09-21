@@ -299,6 +299,9 @@ class ARHandController:
         self.test_mode = False
         self.jarvis_activated = False
         
+        # Screenshot flag for JARVIS
+        self.should_take_screenshot = False
+        
         # Interaction state
         self.grab_states = {}  # hand_idx -> {object, initial_pinch_distance, initial_size}
         self.grab_states_3d = {}  # hand_idx -> {object, initial_pinch_distance, initial_size, last_hand_pos}
@@ -552,6 +555,34 @@ class ARHandController:
             print(f"❌ Failed to save screenshot: {e}")
             return None
     
+    def _notify_jarvis_object_grabbed(self):
+        """Notify JARVIS backend that an object has been grabbed"""
+        try:
+            import requests
+            import threading
+            
+            def notify_background():
+                try:
+                    response = requests.post(
+                        "http://localhost:5001/api/jarvis/object-grabbed",
+                        json={"object_grabbed": True},
+                        timeout=2
+                    )
+                    if response.status_code == 200:
+                        print("✅ JARVIS notified of object grab")
+                    else:
+                        print(f"⚠️ JARVIS notification failed: {response.status_code}")
+                except Exception as e:
+                    print(f"⚠️ Failed to notify JARVIS: {e}")
+            
+            # Send notification in background to avoid blocking
+            threading.Thread(target=notify_background, daemon=True).start()
+            
+        except ImportError:
+            print("⚠️ Requests library not available for JARVIS notification")
+        except Exception as e:
+            print(f"⚠️ Failed to notify JARVIS: {e}")
+    
     def _process_frame(self):
         """Process a single frame"""
         if self.test_mode or self.cap is None:
@@ -571,7 +602,7 @@ class ARHandController:
         hands_info = self.detector.detect_hands(frame)
         
         # Process interactions
-        self._process_interactions(hands_info)
+        self._process_interactions(hands_info, frame)
         
         # Store hands_info for scaling calculations
         self.current_hands_info = hands_info
@@ -612,6 +643,13 @@ class ARHandController:
         
         # Draw rotation hand indicators
         frame = self._draw_rotation_hand_indicators(frame, hands_info)
+        
+        # Take screenshot for JARVIS if flag is set (after all objects are rendered)
+        if self.should_take_screenshot and self.jarvis_activated:
+            screenshot_path = self.save_screenshot_for_jarvis(frame)
+            if screenshot_path:
+                print("📸 Screenshot updated for JARVIS analysis - objects rendered")
+            self.should_take_screenshot = False  # Reset flag
         
         # Show frame
         cv2.imshow('AR Hand Control', frame)
@@ -679,17 +717,11 @@ class ARHandController:
             if self.jarvis_activated:
                 print("✅ JARVIS activated - Voice assistant ready")
                 print("🗣️  Say 'What is this?' to analyze the 3D objects")
-                print("📸 JARVIS will take a screenshot and analyze what you're looking at")
-                
-                # Save screenshot for JARVIS analysis
-                screenshot_path = self.save_screenshot_for_jarvis(frame)
-                if screenshot_path:
-                    print("🧠 Screenshot ready for JARVIS vision analysis")
-                    print("💡 Open the web interface and activate JARVIS to analyze this image")
+                print("📸 JARVIS will analyze the current screenshot when you ask")
                 
                 cv2.putText(frame, "JARVIS ACTIVATED - Voice Assistant Ready", 
                            (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-                cv2.putText(frame, "Screenshot saved for analysis", 
+                cv2.putText(frame, "Select objects to update screenshot", 
                            (50, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
             else:
                 print("🤖 JARVIS deactivated")
@@ -736,7 +768,7 @@ class ARHandController:
                 self.objects[next_index].selected = True
                 print(f"Selected 2D object {next_index + 1}/{len(self.objects)}")
     
-    def _process_interactions(self, hands_info: List[dict]):
+    def _process_interactions(self, hands_info: List[dict], frame: np.ndarray):
         """Process hand interactions with objects"""
         current_grabs = set()
         current_grabs_3d = set()
@@ -765,11 +797,11 @@ class ARHandController:
             
             if stabilized_pinching:
                 # Try 3D objects first
-                if self.show_3d_objects and self._handle_pinch_interaction_3d(hand_info, hand_idx):
+                if self.show_3d_objects and self._handle_pinch_interaction_3d(hand_info, hand_idx, frame):
                     current_grabs_3d.add(hand_idx)
                 # Then try 2D objects
                 elif self.show_2d_objects:
-                    self._handle_pinch_interaction(hand_info, hand_idx)
+                    self._handle_pinch_interaction(hand_info, hand_idx, frame)
                     current_grabs.add(hand_idx)
             
             else:
@@ -989,7 +1021,7 @@ class ARHandController:
             self.grab_states_3d.clear()
             self.pinch_states.clear()
     
-    def _handle_pinch_interaction(self, hand_info: dict, hand_idx: int):
+    def _handle_pinch_interaction(self, hand_info: dict, hand_idx: int, frame: np.ndarray):
         """Handle pinch gesture interaction with improved tracking"""
         pinch_center = hand_info['pinch_center']
         pinch_distance = hand_info['pinch_distance']
@@ -1010,12 +1042,20 @@ class ARHandController:
             
             if closest_obj:
                 # Add this hand to the grabbed_by_hand list
+                was_grabbed = closest_obj.is_grabbed > 0
                 if hand_idx not in closest_obj.grabbed_by_hand:
                     closest_obj.grabbed_by_hand.append(hand_idx)
                 # Update grab state based on number of hands
                 closest_obj.is_grabbed = len(closest_obj.grabbed_by_hand)
                 # Mark object as selected when grabbed
                 closest_obj.selected = True
+                
+                # Set flag to take screenshot for JARVIS analysis when object is first grabbed
+                if not was_grabbed and self.jarvis_activated:
+                    self.should_take_screenshot = True
+                    print("📸 Screenshot will be updated for JARVIS analysis - 2D object grabbed")
+                    # Notify JARVIS that an object was grabbed
+                    self._notify_jarvis_object_grabbed()
                 self.grab_states[hand_idx] = {
                     'object': closest_obj,
                     'initial_pinch_distance': pinch_distance,
@@ -1251,7 +1291,7 @@ class ARHandController:
         print(f"Object exited rotation mode")
                 
     
-    def _handle_pinch_interaction_3d(self, hand_info: dict, hand_idx: int) -> bool:
+    def _handle_pinch_interaction_3d(self, hand_info: dict, hand_idx: int, frame: np.ndarray) -> bool:
         """Handle pinch gesture interaction with 3D objects with improved tracking"""
         pinch_center = hand_info['pinch_center']
         pinch_distance = hand_info['pinch_distance']
@@ -1273,12 +1313,20 @@ class ARHandController:
             
             if closest_obj_3d:
                 # Add this hand to the grabbed_by_hand list
+                was_grabbed = closest_obj_3d.is_grabbed > 0
                 if hand_idx not in closest_obj_3d.grabbed_by_hand:
                     closest_obj_3d.grabbed_by_hand.append(hand_idx)
                 # Update grab state based on number of hands
                 closest_obj_3d.is_grabbed = len(closest_obj_3d.grabbed_by_hand)
                 # Mark object as selected when grabbed
                 closest_obj_3d.selected = True
+                
+                # Set flag to take screenshot for JARVIS analysis when object is first grabbed
+                if not was_grabbed and self.jarvis_activated:
+                    self.should_take_screenshot = True
+                    print("📸 Screenshot will be updated for JARVIS analysis - 3D object grabbed")
+                    # Notify JARVIS that an object was grabbed
+                    self._notify_jarvis_object_grabbed()
                 
                 # Get the current 3D object's screen position for calculating grab offset
                 current_screen_pos = closest_obj_3d.get_screen_position(self.renderer_3d)

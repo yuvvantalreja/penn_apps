@@ -6,6 +6,7 @@ Provides vision analysis endpoints for the JARVIS voice assistant
 
 import os
 import json
+import time
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from gemini_vision_api import GeminiVisionAPI
@@ -132,7 +133,7 @@ def get_gemini_websocket():
     try:
         # This would normally create a secure WebSocket URL
         # For now, return the direct Gemini Live WebSocket URL
-        api_key = os.getenv('GEMINI_API_KEY')
+        api_key = "AIzaSyBjSAvfbl8-JhuxRzrWQVroW7pHNsfUs3Y"
         if not api_key:
             return jsonify({
                 "status": "error",
@@ -192,6 +193,27 @@ def analyze_saved_screenshot():
             "error": str(e)
         }), 500
 
+@app.route('/api/jarvis/object-grabbed', methods=['POST'])
+def jarvis_object_grabbed():
+    """Notify JARVIS that an object has been grabbed in the AR application"""
+    try:
+        print("🎯 Object grabbed notification received")
+        
+        # This endpoint can be used to trigger visual context updates
+        # The frontend will handle the actual context update
+        return jsonify({
+            "status": "success",
+            "message": "Object grabbed notification received",
+            "timestamp": time.time()
+        })
+        
+    except Exception as e:
+        print(f"❌ Object grabbed notification error: {e}")
+        return jsonify({
+            "status": "error",
+            "error": str(e)
+        }), 500
+
 @app.route('/api/jarvis/status', methods=['GET'])
 def jarvis_status():
     """Get JARVIS backend status"""
@@ -204,7 +226,8 @@ def jarvis_status():
             "vision_analysis", 
             "screenshot_analysis",
             "saved_screenshot_analysis",
-            "gemini_live_integration"
+            "gemini_live_integration",
+            "object_grab_notifications"
         ],
         "vision_api_available": vision_api is not None
     })

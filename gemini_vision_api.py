@@ -15,9 +15,9 @@ import io
 class GeminiVisionAPI:
     def __init__(self, api_key: Optional[str] = None):
         """Initialize Gemini Vision API"""
-        self.api_key = api_key or os.getenv('GEMINI_API_KEY')
+        self.api_key = api_key or "AIzaSyBjSAvfbl8-JhuxRzrWQVroW7pHNsfUs3Y"
         if not self.api_key:
-            raise ValueError("Gemini API key not found. Set GEMINI_API_KEY environment variable.")
+            raise ValueError("Gemini API key not found.")
         
         # Configure Gemini
         genai.configure(api_key=self.api_key)
