@@ -121,6 +121,16 @@ class HandGestureDetector:
                 hand_info = self._extract_hand_info(hand_landmarks, frame.shape)
                 hand_info['landmarks'] = hand_landmarks
                 hand_info['hand_idx'] = hand_idx
+                
+                # Add handedness information if available
+                if results.multi_handedness and hand_idx < len(results.multi_handedness):
+                    handedness = results.multi_handedness[hand_idx]
+                    hand_info['handedness'] = handedness.classification[0].label  # 'Left' or 'Right'
+                    hand_info['handedness_score'] = handedness.classification[0].score
+                else:
+                    hand_info['handedness'] = 'Unknown'
+                    hand_info['handedness_score'] = 0.0
+                
                 hands_info.append(hand_info)
                 
         return hands_info
@@ -379,7 +389,8 @@ class ARHandController:
                     # Add all components to objects_3d for individual manipulation
                     for component in assembly.get_all_components():
                         component.set_render_mode("solid")
-                        # Set different auto-rotation speeds for variety
+                        # Disable auto-rotation completely - only rotate in explicit rotation mode
+                        component.auto_rotate = False
                         component.auto_rotation_speed = 0.01 + len(self.objects_3d) * 0.005
                         self.objects_3d.append(component)
                     
@@ -449,16 +460,16 @@ class ARHandController:
         print("- Multi-component CAD assembly support")
         print("- Individual component manipulation")
         print("- Each component can be moved, rotated, and scaled independently")
-        print("- Multi-axis 3D rotation (Yaw, Pitch, Roll)")
+        print("- Hand-specific single-axis 3D rotation")
         print("Gestures:")
         print("- Pinch (thumb + index) near object: Grab object or component")
         print("- Move hand while pinching: Move object/component (improved 3D tracking!)")
         print("- Grab object with TWO hands and move apart/closer: Scale object/component")
-        print("- Two hands then release one: Enter multi-axis rotation mode")
+        print("- Two hands then release one: Enter hand-specific rotation mode")
         print("- In rotation mode:")
-        print("  • Move horizontally: Yaw rotation (Y-axis)")
-        print("  • Move vertically: Pitch rotation (X-axis)")
-        print("  • Move diagonally: Roll rotation (Z-axis)")
+        print("  • RIGHT HAND: Controls X-axis rotation (pitch) - move up/down")
+        print("  • LEFT HAND: Controls Y-axis rotation (yaw) - move left/right")
+        print("  • Unknown hand: Falls back to multi-axis rotation")
         print("Controls:")
         print("- Press 'q' to quit")
         print("- Press 'r' to reset objects")
@@ -767,12 +778,13 @@ class ARHandController:
                                 obj_3d.is_in_rotation_mode = True
                                 obj_3d.rotation_hand_idx = hand_idx
                                 
-                                # Get initial position of rotation hand
+                                # Get initial position of rotation hand and store handedness
                                 rotation_hand_info = next((hand for hand in hands_info if hand['hand_idx'] == hand_idx), None)
                                 if rotation_hand_info:
                                     obj_3d.last_rotation_hand_pos = rotation_hand_info['palm_center']
+                                    obj_3d.rotation_hand_type = rotation_hand_info.get('handedness', 'Unknown')
                                 
-                                print(f"Object entered multi-axis rotation mode - Hand {hand_idx} controlling rotation")
+                                print(f"Object entered rotation mode - {obj_3d.rotation_hand_type} hand {hand_idx} controlling rotation")
                                 
                                 # Remove this hand from grabbed_by_hand but keep it in grab_states_3d for rotation tracking
                                 if hand_idx in obj_3d.grabbed_by_hand:
@@ -784,6 +796,14 @@ class ARHandController:
                                     del grab_state['initial_two_hand_distance']
                                 if 'initial_scale' in grab_state:
                                     del grab_state['initial_scale']
+                                
+                                # Clear locked rotation state
+                                if 'locked_rotation_x' in grab_state:
+                                    del grab_state['locked_rotation_x']
+                                if 'locked_rotation_y' in grab_state:
+                                    del grab_state['locked_rotation_y']
+                                if 'locked_rotation_z' in grab_state:
+                                    del grab_state['locked_rotation_z']
                                 
                                 # Don't delete from grab_states_3d - keep for rotation tracking
                                 continue
@@ -805,6 +825,7 @@ class ARHandController:
                         obj_3d.is_in_rotation_mode = False
                         obj_3d.rotation_hand_idx = None
                         obj_3d.last_rotation_hand_pos = None
+                        obj_3d.rotation_hand_type = None
                     
                     # Reset scaling state if transitioning from two-hand to one-hand or no hands
                     if obj_3d.is_grabbed < 2:
@@ -816,6 +837,13 @@ class ARHandController:
                                     del other_hand_state['initial_two_hand_distance']
                                 if 'initial_scale' in other_hand_state:
                                     del other_hand_state['initial_scale']
+                                # Clear locked rotation state
+                                if 'locked_rotation_x' in other_hand_state:
+                                    del other_hand_state['locked_rotation_x']
+                                if 'locked_rotation_y' in other_hand_state:
+                                    del other_hand_state['locked_rotation_y']
+                                if 'locked_rotation_z' in other_hand_state:
+                                    del other_hand_state['locked_rotation_z']
                     
                     # Only delete if the hand is still in grab_states_3d (might have been removed by rotation mode logic)
                     if hand_idx in self.grab_states_3d:
@@ -873,6 +901,13 @@ class ARHandController:
                                 del other_hand_state['initial_two_hand_distance']
                             if 'initial_scale' in other_hand_state:
                                 del other_hand_state['initial_scale']
+                            # Clear locked rotation state
+                            if 'locked_rotation_x' in other_hand_state:
+                                del other_hand_state['locked_rotation_x']
+                            if 'locked_rotation_y' in other_hand_state:
+                                del other_hand_state['locked_rotation_y']
+                            if 'locked_rotation_z' in other_hand_state:
+                                del other_hand_state['locked_rotation_z']
                 
                 hands_to_remove_3d.append(hand_idx)
         
@@ -1098,15 +1133,16 @@ class ARHandController:
         obj_3d.is_in_rotation_mode = True
         obj_3d.rotation_hand_idx = rotation_hand
         
-        # Get initial position of rotation hand
+        # Get initial position of rotation hand and store handedness
         rotation_hand_info = next((hand for hand in hands_info if hand['hand_idx'] == rotation_hand), None)
         if rotation_hand_info:
             obj_3d.last_rotation_hand_pos = rotation_hand_info['palm_center']
+            obj_3d.rotation_hand_type = rotation_hand_info.get('handedness', 'Unknown')
         
-        print(f"Object entered multi-axis rotation mode - Hand {rotation_hand} controlling rotation")
+        print(f"Object entered rotation mode - {obj_3d.rotation_hand_type} hand {rotation_hand} controlling rotation")
     
     def _handle_rotation_mode_3d(self, hands_info: List[dict]):
-        """Handle rotation mode for 3D objects with multi-axis support"""
+        """Handle rotation mode for 3D objects with hand-specific single-axis rotation"""
         for obj_3d in self.objects_3d:
             if obj_3d.is_in_rotation_mode and obj_3d.rotation_hand_idx is not None:
                 # Get current position of rotation hand
@@ -1120,45 +1156,37 @@ class ARHandController:
                     delta_x = current_pos[0] - last_pos[0]  # Horizontal movement
                     delta_y = current_pos[1] - last_pos[1]  # Vertical movement
                     
-                    rotation_sensitivity = 0.01  # Base rotation speed
-                    movement_threshold = 5  # Minimum movement threshold
+                    rotation_sensitivity = 0.015  # Increased sensitivity for single-axis rotation
+                    movement_threshold = 3  # Lower threshold for more responsive rotation
                     
-                    # Apply Y-axis rotation based on horizontal movement (yaw)
-                    if abs(delta_x) > movement_threshold:
-                        # Invert rotation direction: left movement = clockwise, right movement = counter-clockwise
-                        obj_3d.rotation_y -= delta_x * rotation_sensitivity
-                        
-                        # Keep rotation in reasonable range
-                        obj_3d.rotation_y = obj_3d.rotation_y % (2 * math.pi)
+                    # Get handedness for this rotation hand
+                    hand_type = getattr(obj_3d, 'rotation_hand_type', 'Unknown')
                     
-                    # Apply X-axis rotation based on vertical movement (pitch)
-                    if abs(delta_y) > movement_threshold:
-                        # Natural direction: up movement = rotate up, down movement = rotate down
-                        obj_3d.rotation_x -= delta_y * rotation_sensitivity
-                        
-                        # Keep rotation in reasonable range
-                        obj_3d.rotation_x = obj_3d.rotation_x % (2 * math.pi)
+                    # Apply hand-specific single-axis rotation
+                    if hand_type == 'Right':
+                        # Right hand controls X-axis rotation (pitch)
+                        if abs(delta_y) > movement_threshold:
+                            # Natural direction: up movement = rotate up, down movement = rotate down
+                            obj_3d.rotation_x -= delta_y * rotation_sensitivity
+                            # Keep rotation in reasonable range
+                            obj_3d.rotation_x = obj_3d.rotation_x % (2 * math.pi)
                     
-                    # Apply Z-axis rotation based on diagonal movement (roll)
-                    # Calculate diagonal movement magnitude and direction
-                    movement_magnitude = math.sqrt(delta_x**2 + delta_y**2)
-                    if movement_magnitude > movement_threshold:
-                        # Use the cross product concept - if moving diagonally, apply roll
-                        # This creates roll when moving in diagonal directions
-                        diagonal_threshold = movement_threshold * 1.5  # Require more diagonal movement
-                        
-                        if abs(delta_x) > movement_threshold and abs(delta_y) > movement_threshold:
-                            # Diagonal movement detected - apply roll
-                            # Roll direction based on diagonal quadrant
-                            if (delta_x > 0 and delta_y > 0) or (delta_x < 0 and delta_y < 0):
-                                # Top-right or bottom-left diagonal - positive roll
-                                roll_factor = movement_magnitude * 0.005  # Smaller sensitivity for roll
-                            else:
-                                # Top-left or bottom-right diagonal - negative roll
-                                roll_factor = -movement_magnitude * 0.005
-                            
-                            obj_3d.rotation_z += roll_factor
-                            obj_3d.rotation_z = obj_3d.rotation_z % (2 * math.pi)
+                    elif hand_type == 'Left':
+                        # Left hand controls Y-axis rotation (yaw)
+                        if abs(delta_x) > movement_threshold:
+                            # Natural direction: left movement = counter-clockwise, right movement = clockwise
+                            obj_3d.rotation_y -= delta_x * rotation_sensitivity
+                            # Keep rotation in reasonable range
+                            obj_3d.rotation_y = obj_3d.rotation_y % (2 * math.pi)
+                    
+                    else:
+                        # Unknown hand type - fallback to original multi-axis behavior
+                        if abs(delta_x) > movement_threshold:
+                            obj_3d.rotation_y -= delta_x * rotation_sensitivity
+                            obj_3d.rotation_y = obj_3d.rotation_y % (2 * math.pi)
+                        if abs(delta_y) > movement_threshold:
+                            obj_3d.rotation_x -= delta_y * rotation_sensitivity
+                            obj_3d.rotation_x = obj_3d.rotation_x % (2 * math.pi)
                     
                     # Update last position
                     obj_3d.last_rotation_hand_pos = current_pos
@@ -1175,7 +1203,8 @@ class ARHandController:
         obj_3d.is_in_rotation_mode = False
         obj_3d.rotation_hand_idx = None
         obj_3d.last_rotation_hand_pos = None
-        print(f"Object exited multi-axis rotation mode")
+        obj_3d.rotation_hand_type = None
+        print(f"Object exited rotation mode")
                 
     
     def _handle_pinch_interaction_3d(self, hand_info: dict, hand_idx: int) -> bool:
@@ -1240,14 +1269,29 @@ class ARHandController:
             movement_threshold = 0.5  # pixels - minimum movement to trigger object movement (reduced for better responsiveness)
             
             if movement_magnitude > movement_threshold:
-                # Convert screen movement to world space movement
-                sensitivity = grab_state['movement_sensitivity']
-                world_delta_x = pinch_delta_x * sensitivity
-                world_delta_y = -pinch_delta_y * sensitivity  # Invert Y for correct direction
-                
-                # Apply movement directly without smoothing for immediate response
-                obj_3d.x += world_delta_x
-                obj_3d.y += world_delta_y
+                # Only allow position changes during normal movement - NO ROTATION
+                # Ensure object is not in rotation mode before allowing position changes
+                if not obj_3d.is_in_rotation_mode:
+                    # Convert screen movement to world space movement
+                    sensitivity = grab_state['movement_sensitivity']
+                    world_delta_x = pinch_delta_x * sensitivity
+                    world_delta_y = -pinch_delta_y * sensitivity  # Invert Y for correct direction
+                    
+                    # Apply movement directly without smoothing for immediate response
+                    obj_3d.x += world_delta_x
+                    obj_3d.y += world_delta_y
+                    
+                    # Explicitly lock rotation during normal movement
+                    # Store current rotation to prevent any drift
+                    if 'locked_rotation_x' not in grab_state:
+                        grab_state['locked_rotation_x'] = obj_3d.rotation_x
+                        grab_state['locked_rotation_y'] = obj_3d.rotation_y
+                        grab_state['locked_rotation_z'] = obj_3d.rotation_z
+                    
+                    # Force rotation to stay locked
+                    obj_3d.rotation_x = grab_state['locked_rotation_x']
+                    obj_3d.rotation_y = grab_state['locked_rotation_y']
+                    obj_3d.rotation_z = grab_state['locked_rotation_z']
             
             
             # Track finger positions for better interaction feedback
@@ -1578,22 +1622,41 @@ class ARHandController:
                                 cv2.line(frame, end_point, (arrow_x1, arrow_y1), rotation_color, 2)
                                 cv2.line(frame, end_point, (arrow_x2, arrow_y2), rotation_color, 2)
                     
+                    # Get hand type and create appropriate label
+                    hand_type = getattr(obj_3d, 'rotation_hand_type', 'Unknown')
+                    if hand_type == 'Right':
+                        label_text = "RIGHT: X-AXIS"
+                        axis_text = "(PITCH)"
+                    elif hand_type == 'Left':
+                        label_text = "LEFT: Y-AXIS"
+                        axis_text = "(YAW)"
+                    else:
+                        label_text = "ROTATE"
+                        axis_text = "(MULTI-AXIS)"
+                    
                     # Elegant label with glass background
-                    label_text = "ROTATE"
-                    label_w, label_h = 80, 25
+                    label_w, label_h = 120, 35
                     label_x = hand_center[0] - label_w // 2
-                    label_y = hand_center[1] - 55
+                    label_y = hand_center[1] - 60
                     
                     # Glass background for label
                     self._draw_glass_panel(frame, (label_x, label_y - label_h), (label_w, label_h), alpha=0.3)
                     
-                    # Label text
-                    text_size = cv2.getTextSize(label_text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)[0]
+                    # Main label text
+                    text_size = cv2.getTextSize(label_text, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)[0]
                     text_x = label_x + (label_w - text_size[0]) // 2
-                    text_y = label_y - 8
+                    text_y = label_y - 18
                     
                     cv2.putText(frame, label_text, (text_x, text_y), 
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, rotation_color, 1)
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.45, rotation_color, 1)
+                    
+                    # Axis description text
+                    axis_size = cv2.getTextSize(axis_text, cv2.FONT_HERSHEY_SIMPLEX, 0.35, 1)[0]
+                    axis_x = label_x + (label_w - axis_size[0]) // 2
+                    axis_y = label_y - 5
+                    
+                    cv2.putText(frame, axis_text, (axis_x, axis_y), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.35, (180, 180, 180), 1)
         
         return frame
     
