@@ -32,6 +32,9 @@ class VirtualObject3D:
         # Selection system for rotation
         self.is_selected = False  # True when object is in selection mode for rotation
         self.selection_hand_idx = None  # Hand index that selected this object
+        
+        # Unique identifier for dock management
+        self.id = None
         self.last_selection_hand_pos = None  # Last position of the selecting hand
         
         # Explicit rotation state tracking
