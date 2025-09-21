@@ -352,6 +352,8 @@ class CADAssembly:
         self.components: Dict[str, VirtualObject3D] = {}
         self.component_offsets: Dict[str, Tuple[float, float, float]] = {}
         self.is_single_object = False
+        self.is_decomposed = False  # Track decomposition state
+        self.original_components = {}  # Store original component positions
         
         # Load the assembly
         self.load_assembly()
@@ -591,3 +593,69 @@ class CADAssembly:
             return f"{self.name} (Single Object)"
         else:
             return f"{self.name} ({len(self.components)} Components)"
+    
+    def decompose_assembly(self):
+        """Decompose the assembly into individual components with spread positions"""
+        if self.is_single_object or self.is_decomposed:
+            return
+        
+        print(f"🔧 Decomposing {self.name} into {len(self.components)} components")
+        
+        # Store original positions
+        for comp_name, component in self.components.items():
+            self.original_components[comp_name] = {
+                'x': component.x,
+                'y': component.y,
+                'z': component.z
+            }
+        
+        # Calculate spread positions around the assembly center
+        import math
+        num_components = len(self.components)
+        spread_radius = 2.0  # Distance to spread components
+        
+        for i, (comp_name, component) in enumerate(self.components.items()):
+            # Calculate angle for this component
+            angle = (2 * math.pi * i) / num_components
+            
+            # Calculate new position
+            new_x = self.base_x + spread_radius * math.cos(angle)
+            new_y = self.base_y + spread_radius * math.sin(angle)
+            new_z = self.base_z + (i * 0.5)  # Slight vertical offset for each component
+            
+            # Update component position
+            component.x = new_x
+            component.y = new_y
+            component.z = new_z
+            
+            # Add some random rotation for visual effect
+            component.rotation_y = angle * 180 / math.pi
+        
+        self.is_decomposed = True
+        print(f"✅ {self.name} decomposed - components spread around center")
+    
+    def recompose_assembly(self):
+        """Recompose the assembly back to original positions"""
+        if self.is_single_object or not self.is_decomposed:
+            return
+        
+        print(f"🔧 Recomposing {self.name} back to original positions")
+        
+        # Restore original positions
+        for comp_name, component in self.components.items():
+            if comp_name in self.original_components:
+                original = self.original_components[comp_name]
+                component.x = original['x']
+                component.y = original['y']
+                component.z = original['z']
+                component.rotation_y = 0.0  # Reset rotation
+        
+        self.is_decomposed = False
+        print(f"✅ {self.name} recomposed - components back to original positions")
+    
+    def toggle_decomposition(self):
+        """Toggle between decomposed and recomposed states"""
+        if self.is_decomposed:
+            self.recompose_assembly()
+        else:
+            self.decompose_assembly()

@@ -371,6 +371,13 @@ class ARHandController:
                 "scale": 0.7,
                 "color": (139, 69, 19)  # Brown color for wood
             },
+            {
+                "path": "f1_car_new.obj",
+                "name": "Formula 1 Car",
+                "position": (1.0, 0.0, -4.0),
+                "scale": 0.8,
+                "color": (220, 20, 20)  # Red color for Formula 1 car
+            },
             # {
             #     "path": "online/valve.obj",
             #     "name": "Valve",
@@ -419,13 +426,18 @@ class ARHandController:
                         # Disable auto-rotation completely - only rotate in explicit rotation mode
                         component.auto_rotate = False
                         component.auto_rotation_speed = 0.01 + len(self.objects_3d) * 0.005
-                        # Assign unique ID for dock management - start hidden
+                        # Assign unique ID for dock management
                         component.id = f"3d_{len(self.objects_3d)}"
-                        self.object_visibility[component.id] = False  # Start hidden
-                        # Move 3D objects off-screen initially
-                        component.x = -1000
-                        component.y = -1000
-                        component.z = -1000
+                        # Make the Formula 1 car start visible (check by name)
+                        if model_info["name"] == "Formula 1 Car":
+                            self.object_visibility[component.id] = True  # Start visible
+                            # Keep it at its original position
+                        else:
+                            self.object_visibility[component.id] = False  # Start hidden
+                            # Move other 3D objects off-screen initially
+                            component.x = -1000
+                            component.y = -1000
+                            component.z = -1000
                         self.objects_3d.append(component)
                     
                     print(f"✅ Loaded {assembly.get_assembly_info()}")
@@ -515,6 +527,7 @@ class ARHandController:
         print("- Press 'x/y/z' to reset rotation on specific axis")
         print("- Press 'space' to cycle through 3D objects")
         print("- Press 'j' to activate JARVIS voice assistant")
+        print("- Press 'd' to toggle F1 car decomposition")
         
         while self.is_running:
             self._process_frame()
@@ -714,6 +727,12 @@ class ARHandController:
             # Activate JARVIS voice assistant
             print("🤖 Activating JARVIS voice assistant...")
             self.jarvis_activated = not self.jarvis_activated
+        elif key == ord('d'):
+            # Toggle decomposition for Formula 1 car
+            for assembly in self.assemblies:
+                if assembly.name == "Formula 1 Car":
+                    assembly.toggle_decomposition()
+                    break
             if self.jarvis_activated:
                 print("✅ JARVIS activated - Voice assistant ready")
                 print("🗣️  Say 'What is this?' to analyze the 3D objects")
@@ -2189,6 +2208,11 @@ class ARHandController:
                 # For 3D objects, place at world center
                 obj_3d.x, obj_3d.y, obj_3d.z = 0.0, 0.0, -3.0
                 print(f"Placed 3D object {object_id} at world center (0, 0, -3)")
+                
+                # Check if this is the Formula 1 car and trigger decomposition
+                if hasattr(obj_3d, 'name') and 'Formula 1 Car' in obj_3d.name:
+                    self._trigger_f1_car_decomposition(obj_3d)
+                
                 return
     
     def _enter_isolation_mode_proper(self, object_id: str):
@@ -2859,6 +2883,11 @@ class ARHandController:
                 # For 3D objects, place at world center
                 obj_3d.x, obj_3d.y, obj_3d.z = 0.0, 0.0, -3.0
                 print(f"Placed 3D object {object_id} at world center (0, 0, -3)")
+                
+                # Check if this is the Formula 1 car and trigger decomposition
+                if hasattr(obj_3d, 'name') and 'Formula 1 Car' in obj_3d.name:
+                    self._trigger_f1_car_decomposition(obj_3d)
+                
                 return
     
     def _enter_isolation_mode_proper(self, object_id: str):
@@ -2872,6 +2901,15 @@ class ARHandController:
             self.object_visibility[obj_id] = (obj_id == object_id)
         
         print(f"Isolation mode: Only {object_id} is now visible")
+    
+    def _trigger_f1_car_decomposition(self, f1_car_obj):
+        """Trigger decomposition of the Formula 1 car when placed from dock"""
+        # Find the assembly that contains this F1 car component
+        for assembly in self.assemblies:
+            if assembly.name == "Formula 1 Car":
+                print(f"🏎️ Triggering F1 car decomposition for {assembly.name}")
+                assembly.decompose_assembly()
+                break
 
 
 def main():

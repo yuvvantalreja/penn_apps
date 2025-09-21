@@ -133,7 +133,7 @@ def get_gemini_websocket():
     try:
         # This would normally create a secure WebSocket URL
         # For now, return the direct Gemini Live WebSocket URL
-        api_key = "AIzaSyBjSAvfbl8-JhuxRzrWQVroW7pHNsfUs3Y"
+        api_key = os.getenv('GEMINI_API_KEY')
         if not api_key:
             return jsonify({
                 "status": "error",
