@@ -21,6 +21,7 @@ class VirtualObject:
         self.is_grabbed = 0  # 0 = not grabbed, 1 = grabbed with 1 hand, 2 = grabbed with 2 hands
         self.grabbed_by_hand = []  # List of hand indices that are grabbing this object
         self.z_depth = 0.0 
+        self.id = None  # Unique identifier for dock management 
         
     def draw(self, frame: np.ndarray) -> np.ndarray:
         """Draw the virtual object with Apple Vision Pro-inspired glassmorphism"""
@@ -306,6 +307,21 @@ class ARHandController:
         self.show_3d_objects = True
         self.show_2d_objects = True
         
+        # Object visibility tracking for dock
+        self.object_visibility = {}  # object_id -> bool
+        self.object_isolation_mode = False  # True when only one object is shown
+        self.isolated_object_id = None  # ID of the isolated object
+        
+        # Dock interaction state
+        self.dock_interaction_state = {}  # hand_idx -> {'object_id': str, 'action': str, 'has_toggled': bool}
+        self.dock_toggle_cooldown = {}  # object_id -> timestamp to prevent rapid toggling
+        self.dock_pinch_states = {}  # hand_idx -> {'was_pinching_in_dock': bool, 'target_object_id': str}
+        
+        # Drag interaction state
+        self.drag_states = {}  # hand_idx -> {'object_id': str, 'start_pos': tuple, 'current_pos': tuple, 'is_dragging': bool, 'dock_pos': tuple}
+        self.drag_threshold = 30  # pixels to start dragging
+        self.drag_out_threshold = 80  # pixels outside dock to activate model
+        
         # Create some initial objects
         self._create_initial_objects()
         
@@ -313,10 +329,15 @@ class ARHandController:
         """Create initial virtual objects"""
         # 2D objects
         self.objects = [
-            # VirtualObject(200, 200, 60, (0, 255, 255), "circle"),  # Yellow ball
-            # VirtualObject(400, 300, 80, (255, 100, 100), "cube"),   # Blue cube
-            # VirtualObject(600, 250, 50, (100, 255, 100), "circle"), # Green ball
+            VirtualObject(200, 200, 60, (0, 255, 255), "circle"),  # Yellow ball
+            VirtualObject(400, 300, 80, (255, 100, 100), "cube"),   # Blue cube
+            VirtualObject(600, 250, 50, (100, 255, 100), "circle"), # Green ball
         ]
+        
+        # Assign unique IDs to 2D objects
+        for i, obj in enumerate(self.objects):
+            obj.id = f"2d_{i}"
+            self.object_visibility[obj.id] = True
         
         # Initialize 3D objects list - will be populated with individual components from assemblies
         self.objects_3d = []
@@ -327,13 +348,13 @@ class ARHandController:
         # Load all objects through the unified CAD Assembly pipeline
         # This handles both single objects and multi-component assemblies
         models_to_load = [
-            # {
-            #     "path": "online/Wooden Crate.obj",
-            #     "name": "Wood Crate",
-            #     "position": (2.0, 0.0, -4.0),
-            #     "scale": 0.7,
-            #     "color": (139, 69, 19)  # Brown color for wood
-            # },
+            {
+                "path": "online/Wooden Crate.obj",
+                "name": "Wood Crate",
+                "position": (2.0, 0.0, -4.0),
+                "scale": 0.7,
+                "color": (139, 69, 19)  # Brown color for wood
+            },
             # {
             #     "path": "online/valve.obj",
             #     "name": "Valve",
@@ -364,11 +385,11 @@ class ARHandController:
                 try:
                     # Create assembly (works for both single objects and multi-component assemblies)
                     assembly = CADAssembly(
-                        model_path,
-                        x=model_info["position"][0],
-                        y=model_info["position"][1], 
-                        z=model_info["position"][2],
-                        scale=model_info["scale"],
+                    model_path, 
+                    x=model_info["position"][0], 
+                    y=model_info["position"][1], 
+                    z=model_info["position"][2],
+                    scale=model_info["scale"], 
                         color=model_info["color"],
                         name=model_info["name"]
                     )
@@ -379,8 +400,11 @@ class ARHandController:
                     # Add all components to objects_3d for individual manipulation
                     for component in assembly.get_all_components():
                         component.set_render_mode("solid")
-                        # Set different auto-rotation speeds for variety
+                # Set different auto-rotation speeds for variety
                         component.auto_rotation_speed = 0.01 + len(self.objects_3d) * 0.005
+                        # Assign unique ID for dock management
+                        component.id = f"3d_{len(self.objects_3d)}"
+                        self.object_visibility[component.id] = True
                         self.objects_3d.append(component)
                     
                     print(f"✅ Loaded {assembly.get_assembly_info()}")
@@ -534,30 +558,33 @@ class ARHandController:
         # Store hands_info for scaling calculations
         self.current_hands_info = hands_info
         
-        # Draw 2D objects
+        # Draw 2D objects (respecting visibility and isolation mode)
         if self.show_2d_objects:
             for obj in self.objects:
-                frame = obj.draw(frame)
+                if self.object_visibility.get(obj.id, True):
+                    frame = obj.draw(frame)
         
-        # Draw 3D objects
+        # Draw 3D objects (respecting visibility and isolation mode)
         if self.show_3d_objects and self.renderer_3d:
             for i, obj_3d in enumerate(self.objects_3d):
-                # Only show pinchable radius for the first two 3D objects
-                if i < 2:
-                    obj_3d.selected = (i == 0)  # First object is selected (yellow), second is not (blue)
-                else:
-                    obj_3d.selected = None  # Hide radius for objects beyond the first two
-                frame = obj_3d.draw(frame, self.renderer_3d)
+                if self.object_visibility.get(obj_3d.id, True):
+                    # Only show pinchable radius for the first two 3D objects
+                    if i < 2:
+                        obj_3d.selected = (i == 0)  # First object is selected (yellow), second is not (blue)
+                    else:
+                        obj_3d.selected = None  # Hide radius for objects beyond the first two
+                    frame = obj_3d.draw(frame, self.renderer_3d)
                 
                 # Draw elegant targeting indicator for 3D objects when pinching near them
-                for hand_info in hands_info:
-                    if (hand_info['is_pinching'] and 
+                if self.object_visibility.get(obj_3d.id, True):
+                    for hand_info in hands_info:
+                        if (hand_info['is_pinching'] and 
                         not obj_3d.is_grabbed and 
                         obj_3d.is_point_inside(hand_info['pinch_center'][0], hand_info['pinch_center'][1], self.renderer_3d)):
-                        
-                        screen_pos = obj_3d.get_screen_position(self.renderer_3d)
-                        if screen_pos:
-                            self._draw_elegant_targeting_indicator(frame, screen_pos, hand_info['pinch_center'])
+                            
+                            screen_pos = obj_3d.get_screen_position(self.renderer_3d)
+                            if screen_pos:
+                                self._draw_elegant_targeting_indicator(frame, screen_pos, hand_info['pinch_center'])
             
         # Draw hand landmarks
         frame = self.detector.draw_landmarks(frame, hands_info)
@@ -617,6 +644,16 @@ class ARHandController:
             for obj_3d in self.objects_3d:
                 obj_3d.rotation_z = 0.0
             print("Reset Z-axis rotation")
+        elif key == ord('e'):
+            # Exit isolation mode - show all objects
+            if self.object_isolation_mode:
+                self.object_isolation_mode = False
+                self.isolated_object_id = None
+                for obj_id in self.object_visibility:
+                    self.object_visibility[obj_id] = True
+                print("Exited isolation mode - all objects visible")
+            else:
+                print("Not in isolation mode")
         elif key == ord('j'):
             # Activate JARVIS voice assistant
             print("🤖 Activating JARVIS voice assistant...")
@@ -1269,7 +1306,10 @@ class ARHandController:
         color = (random.randint(50, 255), random.randint(50, 255), random.randint(50, 255))
         shape = random.choice(["circle", "cube"])
         
-        self.objects.append(VirtualObject(x, y, size, color, shape))
+        new_obj = VirtualObject(x, y, size, color, shape)
+        new_obj.id = f"2d_{len(self.objects)}"
+        self.object_visibility[new_obj.id] = True
+        self.objects.append(new_obj)
     
     def _draw_ui(self, frame: np.ndarray, hands_info: List[dict]) -> np.ndarray:
         """Draw Apple Vision Pro-inspired user interface elements"""
@@ -1292,20 +1332,22 @@ class ARHandController:
                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, vision_silver, 2)
         
         # Subtle gesture hint
-        hint = f"Pinch gestures • {len(hands_info)} hands detected"
-        hint_size = cv2.getTextSize(hint, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)[0]
+        hint = f"Pinch dot: toggle on/off • Drag out: place • Two hands drag: isolate • E: show all • {len(hands_info)} hands detected"
+        hint_size = cv2.getTextSize(hint, cv2.FONT_HERSHEY_SIMPLEX, 0.35, 1)[0]
         hint_x = (w - hint_size[0]) // 2
         cv2.putText(frame, hint, (hint_x, 55), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.4, (150, 150, 150), 1)
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.35, (150, 150, 150), 1)
         
-        # Draw floating status panel (bottom)
-        self._draw_floating_status_panel(frame, hands_info)
+        # Remove the floating status panel - dock only
         
         # Draw hand interaction indicators with elegance
         self._draw_elegant_hand_indicators(frame, hands_info)
         
         # Draw object count indicators in corners
         self._draw_corner_indicators(frame)
+        
+        # Draw Apple-inspired capsule dock
+        self._draw_capsule_dock(frame, hands_info)
         
         return frame
     
@@ -1454,6 +1496,629 @@ class ARHandController:
                 fps_text = f"{int(fps)}"
                 cv2.putText(frame, fps_text, (15, 30), 
                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, (150, 150, 150), 1)
+    
+    def _draw_capsule_dock(self, frame: np.ndarray, hands_info: List[dict]):
+        """Draw Apple-inspired capsule dock with all objects"""
+        h, w = frame.shape[:2]
+        
+        # Collect all objects (2D and 3D)
+        all_objects = []
+        
+        # Add 2D objects
+        for obj in self.objects:
+            all_objects.append({
+                'id': obj.id,
+                'type': '2D',
+                'color': obj.color,
+                'shape': obj.shape,
+                'object': obj
+            })
+        
+        # Add 3D objects
+        for obj in self.objects_3d:
+            all_objects.append({
+                'id': obj.id,
+                'type': '3D',
+                'color': obj.color,
+                'shape': 'model',
+                'object': obj
+            })
+        
+        if not all_objects:
+            return
+        
+        # Dock dimensions - bigger and positioned higher
+        dock_height = 100
+        dock_padding = 25
+        item_size = 65
+        item_spacing = 20
+        dock_width = len(all_objects) * (item_size + item_spacing) - item_spacing + dock_padding * 2
+        
+        # Center dock horizontally and position higher from bottom
+        dock_x = (w - dock_width) // 2
+        dock_y = h - dock_height - 60
+        
+        # Draw main capsule background with glassmorphism
+        self._draw_capsule_background(frame, dock_x, dock_y, dock_width, dock_height)
+        
+        # Draw object thumbnails
+        for i, obj_info in enumerate(all_objects):
+            item_x = dock_x + dock_padding + i * (item_size + item_spacing)
+            item_y = dock_y + (dock_height - item_size) // 2
+            
+            self._draw_object_thumbnail(frame, item_x, item_y, item_size, obj_info)
+        
+        # Handle dock interactions
+        self._handle_dock_interactions(frame, hands_info, all_objects, dock_x, dock_y, dock_width, dock_height, item_size, item_spacing)
+        
+        # Clean up old dock states for hands that are no longer detected
+        self._cleanup_dock_states(hands_info)
+    
+    def _draw_capsule_background(self, frame: np.ndarray, x: int, y: int, width: int, height: int):
+        """Draw the capsule-shaped dock background"""
+        # Create mask for rounded rectangle
+        overlay = frame.copy()
+        
+        # Draw rounded rectangle using circles and rectangle
+        radius = height // 2
+        
+        # Main rectangle
+        cv2.rectangle(overlay, (x + radius, y), (x + width - radius, y + height), (40, 40, 40), -1)
+        
+        # Left semicircle
+        cv2.circle(overlay, (x + radius, y + radius), radius, (40, 40, 40), -1)
+        
+        # Right semicircle  
+        cv2.circle(overlay, (x + width - radius, y + radius), radius, (40, 40, 40), -1)
+        
+        # Apply glassmorphism effect
+        cv2.addWeighted(overlay, 0.3, frame, 0.7, 0, frame)
+        
+        # Add subtle border
+        cv2.rectangle(frame, (x + radius, y), (x + width - radius, y + height), (100, 100, 100), 1)
+        cv2.circle(frame, (x + radius, y + radius), radius, (100, 100, 100), 1)
+        cv2.circle(frame, (x + width - radius, y + radius), radius, (100, 100, 100), 1)
+    
+    def _draw_object_thumbnail(self, frame: np.ndarray, x: int, y: int, size: int, obj_info: dict):
+        """Draw individual object thumbnail in dock"""
+        center_x = x + size // 2
+        center_y = y + size // 2
+        
+        # Determine colors based on ACTUAL visibility state from object_visibility dict
+        actual_visibility = self.object_visibility.get(obj_info['id'], True)
+        
+        if actual_visibility:
+            # Object is visible in scene - lights ON (full brightness)
+            base_color = obj_info['color']
+            border_color = (200, 200, 200)
+        else:
+            # Object is hidden in scene - lights OFF (dimmed)
+            base_color = tuple(int(c * 0.3) for c in obj_info['color'])
+            border_color = (80, 80, 80)
+        
+        # Draw thumbnail background
+        thumbnail_size = size - 10
+        thumbnail_radius = thumbnail_size // 2
+        
+        # Glassmorphism background
+        overlay = frame.copy()
+        cv2.circle(overlay, (center_x, center_y), thumbnail_radius, base_color, -1)
+        cv2.addWeighted(overlay, 0.6, frame, 0.4, 0, frame)
+        
+        # Draw shape indicator
+        if obj_info['shape'] == 'circle':
+            cv2.circle(frame, (center_x, center_y), thumbnail_radius - 8, base_color, 2)
+        elif obj_info['shape'] == 'cube':
+            rect_size = thumbnail_radius - 8
+            cv2.rectangle(frame, 
+                         (center_x - rect_size, center_y - rect_size),
+                         (center_x + rect_size, center_y + rect_size),
+                         base_color, 2)
+        else:  # 3D model
+            # Draw 3D indicator (diamond shape)
+            points = np.array([
+                [center_x, center_y - thumbnail_radius + 8],
+                [center_x + thumbnail_radius - 8, center_y],
+                [center_x, center_y + thumbnail_radius - 8],
+                [center_x - thumbnail_radius + 8, center_y]
+            ], np.int32)
+            cv2.polylines(frame, [points], True, base_color, 2)
+        
+        # Draw border
+        cv2.circle(frame, (center_x, center_y), thumbnail_radius, border_color, 2)
+        
+        # Add type indicator with larger text for bigger dock
+        type_text = obj_info['type']
+        text_size = cv2.getTextSize(type_text, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)[0]
+        text_x = center_x - text_size[0] // 2
+        text_y = center_y + size // 2 + 18
+        
+        cv2.putText(frame, type_text, (text_x, text_y), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.4, border_color, 1)
+    
+    def _handle_dock_interactions(self, frame: np.ndarray, hands_info: List[dict], all_objects: list,
+                                 dock_x: int, dock_y: int, dock_width: int, dock_height: int,
+                                 item_size: int, item_spacing: int):
+        """Handle pinch interactions with dock items"""
+        dock_padding = 25  # Updated padding
+        current_time = time.time()
+        
+        # Handle drag interactions (both single and two-hand)
+        self._handle_dock_drag_interactions(hands_info, all_objects, dock_x, dock_y, dock_width, dock_height, item_size, item_spacing, frame)
+    
+    def _handle_dock_drag_interactions(self, hands_info: List[dict], all_objects: list,
+                                      dock_x: int, dock_y: int, dock_width: int, dock_height: int,
+                                      item_size: int, item_spacing: int, frame: np.ndarray):
+        """Handle drag interactions - single hand shows model, two hands isolate"""
+        dock_padding = 25
+        current_time = time.time()
+        
+        # Process each hand
+        for hand_info in hands_info:
+            hand_idx = hand_info['hand_idx']
+            is_pinching = hand_info['is_pinching']
+            pinch_pos = hand_info['pinch_center']
+            
+            if is_pinching:
+                # Check if starting a new drag from dock
+                if hand_idx not in self.drag_states:
+                    # Check if pinch started in dock area
+                    if (dock_x <= pinch_pos[0] <= dock_x + dock_width and 
+                        dock_y <= pinch_pos[1] <= dock_y + dock_height):
+                        
+                        # Find which dock item is being targeted
+                        target_object_id = None
+                        dock_item_pos = None
+                        
+                        for i, obj_info in enumerate(all_objects):
+                            item_x = dock_x + dock_padding + i * (item_size + item_spacing)
+                            item_center_x = item_x + item_size // 2
+                            item_center_y = dock_y + dock_height // 2
+                            
+                            distance = math.sqrt((pinch_pos[0] - item_center_x)**2 + (pinch_pos[1] - item_center_y)**2)
+                            
+                            if distance <= item_size // 2:
+                                target_object_id = obj_info['id']
+                                dock_item_pos = (item_center_x, item_center_y)
+                                break
+                        
+                        if target_object_id:
+                            # Start drag state
+                            self.drag_states[hand_idx] = {
+                                'object_id': target_object_id,
+                                'start_pos': pinch_pos,
+                                'current_pos': pinch_pos,
+                                'is_dragging': False,
+                                'dock_pos': dock_item_pos
+                            }
+                
+                # Update existing drag state
+                if hand_idx in self.drag_states:
+                    drag_state = self.drag_states[hand_idx]
+                    drag_state['current_pos'] = pinch_pos
+                    
+                    # Calculate distance from start position
+                    start_pos = drag_state['start_pos']
+                    drag_distance = math.sqrt((pinch_pos[0] - start_pos[0])**2 + (pinch_pos[1] - start_pos[1])**2)
+                    
+                    # Check if dragging has started
+                    if not drag_state['is_dragging'] and drag_distance > self.drag_threshold:
+                        drag_state['is_dragging'] = True
+                        print(f"Started dragging {drag_state['object_id']}")
+                    
+                    # If dragging, check distance from dock
+                    if drag_state['is_dragging']:
+                        dock_distance = math.sqrt((pinch_pos[0] - dock_x - dock_width/2)**2 + (pinch_pos[1] - dock_y - dock_height/2)**2)
+                        
+                        if dock_distance > self.drag_out_threshold:
+                            # Far enough from dock - activate model
+                            self._activate_dragged_model(drag_state['object_id'], hands_info)
+                        
+                        # Draw dragged dot
+                        self._draw_dragged_dot(frame, drag_state, all_objects, item_size)
+            
+            else:
+                # Released pinch - handle drop or toggle
+                if hand_idx in self.drag_states:
+                    drag_state = self.drag_states[hand_idx]
+                    
+                    if drag_state['is_dragging']:
+                        # This was a drag operation - place object
+                        hands_dragging_this = sum(1 for ds in self.drag_states.values() 
+                                                 if ds['object_id'] == drag_state['object_id'] and ds['is_dragging'])
+                        
+                        if hands_dragging_this >= 2:
+                            # Two hands - place object at center between the two drag points
+                            self._place_object_at_isolation_center(drag_state['object_id'])
+                        else:
+                            # Single hand - place object where dot was dropped
+                            self._place_object_at_drop_position(drag_state['object_id'], drag_state['current_pos'])
+                        
+                        print(f"Dropped {drag_state['object_id']} - placed in scene")
+                    else:
+                        # This was just a pinch (no drag) - toggle visibility
+                        self._toggle_object_with_placement(drag_state['object_id'])
+                    
+                    # Remove drag state
+                    del self.drag_states[hand_idx]
+    
+    def _activate_dragged_model(self, object_id: str, hands_info: List[dict]):
+        """Prepare model for drag interaction - DO NOT show until dropped"""
+        # Count how many hands are dragging this same object
+        hands_dragging_this = 0
+        for drag_state in self.drag_states.values():
+            if drag_state['object_id'] == object_id and drag_state['is_dragging']:
+                hands_dragging_this += 1
+        
+        # Don't actually activate/show anything during drag
+        # Objects will only be shown when dropped via _place_object_at_drop_position
+        # or _place_object_at_isolation_center methods
+        print(f"Preparing {object_id} for placement ({'isolate' if hands_dragging_this >= 2 else 'show'} mode)")
+    
+    def _draw_dragged_dot(self, frame: np.ndarray, drag_state: dict, all_objects: list, item_size: int):
+        """Draw the dragged dot following the hand"""
+        current_pos = drag_state['current_pos']
+        object_id = drag_state['object_id']
+        
+        # Find object info
+        obj_info = None
+        for obj in all_objects:
+            if obj['id'] == object_id:
+                obj_info = obj
+                break
+        
+        if not obj_info:
+            return
+        
+        # Draw dot at current position
+        dot_radius = item_size // 4
+        
+        # Determine color based on drag distance and number of hands
+        hands_on_this = sum(1 for ds in self.drag_states.values() 
+                           if ds['object_id'] == object_id and ds['is_dragging'])
+        
+        if hands_on_this >= 2:
+            # Two hands - isolation mode color
+            color = (255, 200, 100)  # Orange
+            border_color = (255, 150, 50)
+            text = "ISOLATE"
+        else:
+            # Single hand - show model color
+            color = obj_info['color']
+            border_color = (255, 255, 255)
+            text = "SHOW"
+        
+        # Draw main dot
+        cv2.circle(frame, current_pos, dot_radius, color, -1)
+        cv2.circle(frame, current_pos, dot_radius, border_color, 2)
+        
+        # Draw connection line back to dock
+        dock_pos = drag_state['dock_pos']
+        cv2.line(frame, current_pos, dock_pos, (150, 150, 150), 1)
+        
+        # Draw text indicator
+        text_size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)[0]
+        text_pos = (current_pos[0] - text_size[0] // 2, current_pos[1] - dot_radius - 10)
+        cv2.putText(frame, text, text_pos, cv2.FONT_HERSHEY_SIMPLEX, 0.4, border_color, 1)
+        
+        # Don't show placement preview during drag - only show after unpinch
+        # self._draw_placement_preview(frame, current_pos, obj_info, hands_on_this >= 2)
+    
+    def _draw_placement_preview(self, frame: np.ndarray, position: tuple, obj_info: dict, is_isolation: bool):
+        """Draw a ghost preview of where the object will be placed"""
+        x, y = position
+        
+        # Draw a subtle preview circle/shape
+        if is_isolation:
+            # For isolation mode, draw a special preview
+            preview_color = (100, 150, 255)  # Light orange
+            preview_radius = 25
+        else:
+            # For single object, use object's color but dimmed
+            preview_color = tuple(int(c * 0.6) for c in obj_info['color'])
+            preview_radius = 20
+        
+        # Draw ghost object preview
+        if obj_info['shape'] == 'circle':
+            cv2.circle(frame, position, preview_radius, preview_color, 2)
+            cv2.circle(frame, position, preview_radius - 5, preview_color, 1)
+        elif obj_info['shape'] == 'cube':
+            cv2.rectangle(frame, 
+                         (x - preview_radius, y - preview_radius),
+                         (x + preview_radius, y + preview_radius),
+                         preview_color, 2)
+        else:  # 3D model
+            # Draw diamond shape for 3D objects
+            points = np.array([
+                [x, y - preview_radius],
+                [x + preview_radius, y],
+                [x, y + preview_radius],
+                [x - preview_radius, y]
+            ], np.int32)
+            cv2.polylines(frame, [points], True, preview_color, 2)
+        
+        # Add small placement indicator
+        cv2.circle(frame, position, 3, (255, 255, 255), -1)
+    
+    def _place_object_at_drop_position(self, object_id: str, drop_position: tuple):
+        """Place object at the dropped position in 3D space"""
+        # Convert screen coordinates to world coordinates
+        coords = self._screen_to_world_coordinates(drop_position)
+        world_x_2d, world_y_2d, world_x_3d, world_y_3d, world_z_3d = coords
+        
+        # Find and move the object, then make it visible
+        for obj in self.objects:
+            if obj.id == object_id:
+                obj.x, obj.y = world_x_2d, world_y_2d
+                self.object_visibility[object_id] = True  # Make visible after placement
+                print(f"Placed 2D object {object_id} at screen {drop_position} -> world ({world_x_2d:.2f}, {world_y_2d:.2f})")
+                return
+        
+        for obj_3d in self.objects_3d:
+            if obj_3d.id == object_id:
+                obj_3d.x, obj_3d.y, obj_3d.z = world_x_3d, world_y_3d, world_z_3d
+                self.object_visibility[object_id] = True  # Make visible after placement
+                print(f"Placed 3D object {object_id} at screen {drop_position} -> world ({world_x_3d:.3f}, {world_y_3d:.3f}, {world_z_3d:.1f})")
+                return
+    
+    def _place_object_at_isolation_center(self, object_id: str):
+        """Place object at center between two isolation drag points"""
+        # Find all drag states for this object
+        drag_positions = []
+        for drag_state in self.drag_states.values():
+            if drag_state['object_id'] == object_id and drag_state['is_dragging']:
+                drag_positions.append(drag_state['current_pos'])
+        
+        if len(drag_positions) >= 2:
+            # Calculate center point between the drag positions
+            center_x = sum(pos[0] for pos in drag_positions) // len(drag_positions)
+            center_y = sum(pos[1] for pos in drag_positions) // len(drag_positions)
+            center_position = (center_x, center_y)
+            
+            # Convert to world coordinates and place object
+            coords = self._screen_to_world_coordinates(center_position)
+            world_x_2d, world_y_2d, world_x_3d, world_y_3d, world_z_3d = coords
+            
+            # Find and move the object, then enter isolation mode properly
+            for obj in self.objects:
+                if obj.id == object_id:
+                    obj.x, obj.y = world_x_2d, world_y_2d
+                    self._enter_isolation_mode_proper(object_id)  # This handles visibility
+                    print(f"Placed 2D object {object_id} at isolation center {center_position} -> world ({world_x_2d:.2f}, {world_y_2d:.2f})")
+                    return
+            
+            for obj_3d in self.objects_3d:
+                if obj_3d.id == object_id:
+                    obj_3d.x, obj_3d.y, obj_3d.z = world_x_3d, world_y_3d, world_z_3d
+                    self._enter_isolation_mode_proper(object_id)  # This handles visibility
+                    print(f"Placed 3D object {object_id} at isolation center {center_position} -> world ({world_x_3d:.3f}, {world_y_3d:.3f}, {world_z_3d:.1f})")
+                    return
+    
+    def _screen_to_world_coordinates(self, screen_pos: tuple) -> tuple:
+        """Convert screen coordinates to 3D world coordinates"""
+        screen_x, screen_y = screen_pos
+        
+        # Get frame dimensions
+        if hasattr(self, 'renderer_3d'):
+            frame_width = self.renderer_3d.width
+            frame_height = self.renderer_3d.height
+        else:
+            frame_width = 1280  # Default width
+            frame_height = 720   # Default height
+        
+        # Map screen coordinates to world coordinates
+        # Center of screen maps to world (0, 0)
+        # Scale factors adjusted for better object placement
+        
+        # For 2D objects - they use direct pixel coordinates, so use 1:1 mapping
+        scale_factor_2d = 1.0  # 2D objects use screen coordinates directly
+        
+        # For 3D objects - use smaller scale for precise placement  
+        scale_factor_3d = 0.005  # 3D objects move less, more precise
+        
+        # Calculate relative position from screen center
+        rel_x = screen_x - frame_width / 2
+        rel_y = screen_y - frame_height / 2
+        
+        # For 2D objects - use direct screen coordinates (no conversion needed)
+        world_x_2d = screen_x
+        world_y_2d = screen_y
+        
+        # For 3D objects - convert screen to world coordinates
+        world_x_3d = rel_x * scale_factor_3d
+        world_y_3d = -rel_y * scale_factor_3d  # Invert Y axis
+        world_z_3d = -3.0  # Place 3D objects at reasonable depth
+        
+        # Return both 2D and 3D coordinates (caller will use appropriate ones)
+        return (world_x_2d, world_y_2d, world_x_3d, world_y_3d, world_z_3d)
+    
+    def _handle_two_hand_dock_pinch(self, hands_info: List[dict], all_objects: list,
+                                   dock_x: int, dock_y: int, dock_width: int, dock_height: int,
+                                   item_size: int, item_spacing: int, frame: np.ndarray):
+        """Handle two hands pinching the same dock item for isolation mode"""
+        if len(hands_info) < 2:
+            return
+        
+        dock_padding = 25
+        current_time = time.time()
+        
+        # Check if exactly two hands are pinching
+        pinching_hands = [hand for hand in hands_info if hand['is_pinching']]
+        if len(pinching_hands) != 2:
+            return
+        
+        # Check if both hands are pinching within dock area
+        hands_in_dock = []
+        for hand_info in pinching_hands:
+            pinch_x, pinch_y = hand_info['pinch_center']
+            if (dock_x <= pinch_x <= dock_x + dock_width and 
+                dock_y <= pinch_y <= dock_y + dock_height):
+                hands_in_dock.append(hand_info)
+        
+        if len(hands_in_dock) != 2:
+            return
+        
+        # Find which dock item both hands are targeting
+        target_object_id = None
+        target_center = None
+        
+        for i, obj_info in enumerate(all_objects):
+            item_x = dock_x + dock_padding + i * (item_size + item_spacing)
+            item_center_x = item_x + item_size // 2
+            item_center_y = dock_y + dock_height // 2
+            
+            hands_on_this_item = 0
+            for hand_info in hands_in_dock:
+                pinch_x, pinch_y = hand_info['pinch_center']
+                distance = math.sqrt((pinch_x - item_center_x)**2 + (pinch_y - item_center_y)**2)
+                if distance <= item_size // 2 + 10:  # Slightly larger detection area for two-hand
+                    hands_on_this_item += 1
+            
+            # If both hands are on the same dock item
+            if hands_on_this_item >= 2:
+                target_object_id = obj_info['id']
+                target_center = (item_center_x, item_center_y)
+                break
+        
+        if target_object_id:
+            # Check if this is a new two-hand gesture
+            two_hand_key = f"two_hand_{target_object_id}"
+            
+            # Use a special state tracking for two-hand gestures
+            if not hasattr(self, 'two_hand_gesture_active'):
+                self.two_hand_gesture_active = {}
+            
+            if two_hand_key not in self.two_hand_gesture_active:
+                # New two-hand gesture detected
+                self.two_hand_gesture_active[two_hand_key] = current_time
+                
+                # Check cooldown to prevent rapid toggling
+                if (target_object_id not in self.dock_toggle_cooldown or 
+                    current_time - self.dock_toggle_cooldown[target_object_id] > 1.0):
+                    
+                    # Turn off all other objects, turn on this one
+                    self._enter_isolation_mode_proper(target_object_id)
+                    self.dock_toggle_cooldown[target_object_id] = current_time
+                    print(f"Two-hand isolation: {target_object_id}")
+            
+            # Always draw isolation indicator when two hands are detected
+            cv2.circle(frame, target_center, item_size // 2 + 8, (255, 200, 100), 4)
+            cv2.circle(frame, target_center, item_size // 2 + 12, (255, 200, 100), 2)
+            
+            # Add text indicator
+            cv2.putText(frame, "ISOLATE", (target_center[0] - 25, target_center[1] - item_size // 2 - 20), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 200, 100), 2)
+        else:
+            # No two-hand gesture detected, clear active state
+            if hasattr(self, 'two_hand_gesture_active'):
+                self.two_hand_gesture_active.clear()
+    
+    def _cleanup_dock_states(self, hands_info: List[dict]):
+        """Clean up dock interaction states for hands that are no longer detected"""
+        current_hand_indices = {hand['hand_idx'] for hand in hands_info}
+        
+        # Clean up drag states
+        hands_to_remove = []
+        for hand_idx in self.drag_states:
+            if hand_idx not in current_hand_indices:
+                hands_to_remove.append(hand_idx)
+        
+        for hand_idx in hands_to_remove:
+            print(f"Cleaning up drag state for disappeared hand {hand_idx}")
+            del self.drag_states[hand_idx]
+        
+        # Clean up dock pinch states
+        hands_to_remove = []
+        for hand_idx in self.dock_pinch_states:
+            if hand_idx not in current_hand_indices:
+                hands_to_remove.append(hand_idx)
+        
+        for hand_idx in hands_to_remove:
+            del self.dock_pinch_states[hand_idx]
+        
+        # Clean up dock interaction states
+        hands_to_remove = []
+        for hand_idx in self.dock_interaction_state:
+            if hand_idx not in current_hand_indices:
+                hands_to_remove.append(hand_idx)
+        
+        for hand_idx in hands_to_remove:
+            del self.dock_interaction_state[hand_idx]
+    
+    def _toggle_object_visibility(self, object_id: str):
+        """Toggle object visibility in the scene"""
+        if object_id in self.object_visibility:
+            self.object_visibility[object_id] = not self.object_visibility[object_id]
+            print(f"Toggled {object_id}: {'ON' if self.object_visibility[object_id] else 'OFF'}")
+    
+    def _toggle_object_with_placement(self, object_id: str):
+        """Toggle object visibility - if turning on, place at center; if turning off, hide"""
+        current_visibility = self.object_visibility.get(object_id, True)
+        
+        if current_visibility:
+            # Currently visible - turn off
+            self.object_visibility[object_id] = False
+            print(f"Turned off {object_id}")
+        else:
+            # Currently hidden - turn on and place at center
+            self.object_visibility[object_id] = True
+            self._place_object_at_center(object_id)
+            print(f"Turned on {object_id} and placed at center")
+    
+    def _place_object_at_center(self, object_id: str):
+        """Place object at screen center"""
+        # Get frame dimensions for center calculation
+        if hasattr(self, 'renderer_3d'):
+            center_x = self.renderer_3d.width // 2
+            center_y = self.renderer_3d.height // 2
+        else:
+            center_x = 640  # Default center
+            center_y = 360
+        
+        # Find and move the object to center
+        for obj in self.objects:
+            if obj.id == object_id:
+                obj.x, obj.y = center_x, center_y
+                print(f"Placed 2D object {object_id} at center ({center_x}, {center_y})")
+                return
+        
+        for obj_3d in self.objects_3d:
+            if obj_3d.id == object_id:
+                # For 3D objects, place at world center
+                obj_3d.x, obj_3d.y, obj_3d.z = 0.0, 0.0, -3.0
+                print(f"Placed 3D object {object_id} at world center (0, 0, -3)")
+                return
+    
+    def _enter_isolation_mode_proper(self, object_id: str):
+        """Enter isolation mode - turn off all other objects, turn on selected object"""
+        # Always enter isolation mode with this specific object
+        self.object_isolation_mode = True
+        self.isolated_object_id = object_id
+        
+        # Turn off all objects, then turn on only the selected one
+        for obj_id in self.object_visibility:
+            self.object_visibility[obj_id] = (obj_id == object_id)
+        
+        print(f"Isolation mode: Only {object_id} is now visible")
+    
+    def _enter_isolation_mode(self, object_id: str):
+        """Enter isolation mode showing only the specified object (toggle version)"""
+        if self.object_isolation_mode and self.isolated_object_id == object_id:
+            # Exit isolation mode
+            self.object_isolation_mode = False
+            self.isolated_object_id = None
+            # Restore all object visibility
+            for obj_id in self.object_visibility:
+                self.object_visibility[obj_id] = True
+            print("Exited isolation mode - all objects visible")
+        else:
+            # Enter isolation mode
+            self.object_isolation_mode = True
+            self.isolated_object_id = object_id
+            # Hide all objects except the isolated one
+            for obj_id in self.object_visibility:
+                self.object_visibility[obj_id] = (obj_id == object_id)
+            print(f"Entered isolation mode for {object_id}")
     
     def _draw_elegant_targeting_indicator(self, frame: np.ndarray, target_pos: tuple, pinch_pos: tuple):
         """Draw Apple Vision Pro-inspired targeting indicator"""
