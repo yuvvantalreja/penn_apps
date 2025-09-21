@@ -344,10 +344,13 @@ class ARHandController:
             VirtualObject(600, 250, 50, (100, 255, 100), "circle"), # Green ball
         ]
         
-        # Assign unique IDs to 2D objects
+        # Assign unique IDs to 2D objects - start all hidden
         for i, obj in enumerate(self.objects):
             obj.id = f"2d_{i}"
-            self.object_visibility[obj.id] = True
+            self.object_visibility[obj.id] = False  # Start hidden
+            # Move objects off-screen initially
+            obj.x = -1000  # Way off screen
+            obj.y = -1000
         
         # Initialize 3D objects list - will be populated with individual components from assemblies
         self.objects_3d = []
@@ -413,9 +416,13 @@ class ARHandController:
                         # Disable auto-rotation completely - only rotate in explicit rotation mode
                         component.auto_rotate = False
                         component.auto_rotation_speed = 0.01 + len(self.objects_3d) * 0.005
-                        # Assign unique ID for dock management
+                        # Assign unique ID for dock management - start hidden
                         component.id = f"3d_{len(self.objects_3d)}"
-                        self.object_visibility[component.id] = True
+                        self.object_visibility[component.id] = False  # Start hidden
+                        # Move 3D objects off-screen initially
+                        component.x = -1000
+                        component.y = -1000
+                        component.z = -1000
                         self.objects_3d.append(component)
                     
                     print(f"✅ Loaded {assembly.get_assembly_info()}")
@@ -1352,7 +1359,10 @@ class ARHandController:
         
         new_obj = VirtualObject(x, y, size, color, shape)
         new_obj.id = f"2d_{len(self.objects)}"
-        self.object_visibility[new_obj.id] = True
+        self.object_visibility[new_obj.id] = False  # Start hidden
+        # Move off-screen initially
+        new_obj.x = -1000
+        new_obj.y = -1000
         self.objects.append(new_obj)
     
     def _draw_ui(self, frame: np.ndarray, hands_info: List[dict]) -> np.ndarray:
@@ -1738,11 +1748,11 @@ class ARHandController:
         if not all_objects:
             return
         
-        # Dock dimensions - bigger and positioned higher
-        dock_height = 100
-        dock_padding = 25
-        item_size = 65
-        item_spacing = 20
+        # Dock dimensions - much more spaced out
+        dock_height = 120
+        dock_padding = 40
+        item_size = 80
+        item_spacing = 50  # Much more space between dots
         dock_width = len(all_objects) * (item_size + item_spacing) - item_spacing + dock_padding * 2
         
         # Center dock horizontally and position higher from bottom
@@ -1840,18 +1850,18 @@ class ARHandController:
         
         # Add type indicator with larger text for bigger dock
         type_text = obj_info['type']
-        text_size = cv2.getTextSize(type_text, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)[0]
+        text_size = cv2.getTextSize(type_text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)[0]
         text_x = center_x - text_size[0] // 2
-        text_y = center_y + size // 2 + 18
+        text_y = center_y + size // 2 + 25  # More space for larger dock
         
         cv2.putText(frame, type_text, (text_x, text_y), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.4, border_color, 1)
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, border_color, 1)
     
     def _handle_dock_interactions(self, frame: np.ndarray, hands_info: List[dict], all_objects: list,
                                  dock_x: int, dock_y: int, dock_width: int, dock_height: int,
                                  item_size: int, item_spacing: int):
         """Handle pinch interactions with dock items"""
-        dock_padding = 25  # Updated padding
+        dock_padding = 40  # Updated padding to match dock
         current_time = time.time()
         
         # Handle drag interactions (both single and two-hand)
@@ -1861,7 +1871,7 @@ class ARHandController:
                                       dock_x: int, dock_y: int, dock_width: int, dock_height: int,
                                       item_size: int, item_spacing: int, frame: np.ndarray):
         """Handle drag interactions - single hand shows model, two hands isolate"""
-        dock_padding = 25
+        dock_padding = 40  # Updated padding to match dock
         current_time = time.time()
         
         # Process each hand
