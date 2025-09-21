@@ -39,6 +39,9 @@ class VirtualObject3D:
         self.rotation_hand_idx = None  # Hand index that is controlling rotation (the open hand)
         self.last_rotation_hand_pos = None  # Last position of the rotation hand
         
+        # Unique identifier for dock management
+        self.id = None
+        
         # Auto-rotation disabled by default - objects only rotate when pinched
         self.auto_rotate = False
         self.auto_rotation_speed = 0.02
