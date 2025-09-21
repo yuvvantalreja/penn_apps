@@ -110,7 +110,7 @@ def jarvis_test_vision():
         # Test with a simple JARVIS prompt
         test_prompt = """You are JARVIS. Analyze this image and tell me what you see. 
         Be specific about any objects, components, or technical elements visible. 
-        Respond as JARVIS would - sophisticated and informative."""
+        Respond as JARVIS would - sophisticated and informative. If you don't know exactly what it is, say you don't know."""
         
         result = vision_api.analyze_image(image_data, test_prompt)
         
@@ -153,6 +153,45 @@ def get_gemini_websocket():
             "error": str(e)
         }), 500
 
+@app.route('/api/jarvis/analyze-saved-screenshot', methods=['POST'])
+def analyze_saved_screenshot():
+    """Analyze the screenshot saved by the AR hand control application"""
+    try:
+        if not vision_api:
+            return jsonify({
+                "status": "error",
+                "error": "Gemini Vision API not available"
+            }), 500
+        
+        # Look for the saved screenshot file
+        screenshot_path = "jarvis_screenshot.png"
+        if not os.path.exists(screenshot_path):
+            return jsonify({
+                "status": "error",
+                "error": "No screenshot found. Press 'J' in the AR application first."
+            }), 404
+        
+        # Read and encode the screenshot
+        import base64
+        with open(screenshot_path, 'rb') as f:
+            image_data = base64.b64encode(f.read()).decode('utf-8')
+        
+        print(f"🔍 JARVIS analyzing saved screenshot: {screenshot_path}")
+        
+        # Analyze with JARVIS-specific prompt
+        result = vision_api.analyze_screenshot_for_jarvis(image_data)
+        
+        print(f"✅ JARVIS analysis complete: {result['status']}")
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        print(f"❌ JARVIS saved screenshot analysis error: {e}")
+        return jsonify({
+            "status": "error",
+            "error": str(e)
+        }), 500
+
 @app.route('/api/jarvis/status', methods=['GET'])
 def jarvis_status():
     """Get JARVIS backend status"""
@@ -164,6 +203,7 @@ def jarvis_status():
             "voice_interaction",
             "vision_analysis", 
             "screenshot_analysis",
+            "saved_screenshot_analysis",
             "gemini_live_integration"
         ],
         "vision_api_available": vision_api is not None
@@ -192,6 +232,7 @@ if __name__ == "__main__":
     print("  - GET  /api/jarvis/health")
     print("  - POST /api/jarvis/vision-analyze")
     print("  - POST /api/jarvis/test-vision")
+    print("  - POST /api/jarvis/analyze-saved-screenshot")
     print("  - GET  /api/jarvis/status")
     print("  - GET  /api/gemini/websocket")
     

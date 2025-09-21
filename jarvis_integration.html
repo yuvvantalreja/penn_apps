@@ -95,6 +95,7 @@
             <div class="jarvis-controls">
                 <button class="jarvis-btn" onclick="toggleJarvis()">Toggle</button>
                 <button class="jarvis-btn" onclick="testVision()">Test Vision</button>
+                <button class="jarvis-btn" onclick="analyzeScreenshot()">Analyze Screenshot</button>
             </div>
             <div class="jarvis-help">
                 Press J key or say "Hey JARVIS"
@@ -251,15 +252,10 @@
                 // Activate JARVIS if not already active
                 if (!window.jarvisAssistant.getStatus().isListening) {
                     await activateJarvis();
-                    // Wait a moment for activation
                     await new Promise(resolve => setTimeout(resolve, 1000));
                 }
                 
-                // Simulate a "what is this" question
-                const testMessage = "What do you see in this image, JARVIS?";
-                console.log('🗣️ Simulating user question:', testMessage);
-                
-                // This would normally be spoken, but for testing we can trigger vision analysis directly
+                // Trigger vision analysis directly
                 if (window.jarvisAssistant.performVisualAnalysis) {
                     await window.jarvisAssistant.performVisualAnalysis();
                 } else {
@@ -269,6 +265,18 @@
             } catch (error) {
                 console.error('❌ Vision test failed:', error);
             }
+        }
+        
+        async function analyzeScreenshot() {
+            console.log('🔍 Manual screenshot analysis triggered');
+            
+            if (!window.jarvisAssistant) {
+                console.error('❌ JARVIS not initialized');
+                return;
+            }
+            
+            // Trigger visual analysis directly
+            await window.jarvisAssistant.performVisualAnalysis();
         }
         
         // AR Control functions (these would interface with the Python backend)

@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JARVIS Connection Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #1a1a1a;
+            color: #fff;
+        }
+        .test-section {
+            background: #2a2a2a;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 10px;
+            border: 1px solid #444;
+        }
+        button {
+            background: #0066cc;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background: #0052a3;
+        }
+        .result {
+            background: #333;
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 5px;
+            white-space: pre-wrap;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        .success { border-left: 4px solid #00ff00; }
+        .error { border-left: 4px solid #ff0000; }
+    </style>
+</head>
+<body>
+    <h1>🤖 JARVIS Connection Test</h1>
+    
+    <div class="test-section">
+        <h2>1. Backend Health Check</h2>
+        <button onclick="testBackendHealth()">Test Backend Health</button>
+        <div id="health-result" class="result"></div>
+    </div>
+    
+    <div class="test-section">
+        <h2>2. Screenshot Analysis Test</h2>
+        <button onclick="testScreenshotAnalysis()">Test Screenshot Analysis</button>
+        <div id="screenshot-result" class="result"></div>
+    </div>
+    
+    <div class="test-section">
+        <h2>3. JARVIS Voice Assistant Test</h2>
+        <button onclick="testJarvisInit()">Initialize JARVIS</button>
+        <button onclick="testJarvisActivation()">Activate JARVIS</button>
+        <button onclick="testVisualAnalysis()">Trigger Visual Analysis</button>
+        <div id="jarvis-result" class="result"></div>
+    </div>
+    
+    <script>
+        async function testBackendHealth() {
+            const result = document.getElementById('health-result');
+            result.textContent = 'Testing backend health...';
+            
+            try {
+                const response = await fetch('http://localhost:5001/api/jarvis/health');
+                const data = await response.json();
+                
+                result.textContent = `✅ Backend Health: ${JSON.stringify(data, null, 2)}`;
+                result.className = 'result success';
+            } catch (error) {
+                result.textContent = `❌ Backend Error: ${error.message}`;
+                result.className = 'result error';
+            }
+        }
+        
+        async function testScreenshotAnalysis() {
+            const result = document.getElementById('screenshot-result');
+            result.textContent = 'Testing screenshot analysis...';
+            
+            try {
+                const response = await fetch('http://localhost:5001/api/jarvis/analyze-saved-screenshot', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                const data = await response.json();
+                
+                if (data.status === 'success') {
+                    result.textContent = `✅ Screenshot Analysis Success:\n${data.analysis}`;
+                    result.className = 'result success';
+                } else {
+                    result.textContent = `❌ Screenshot Analysis Error: ${data.error}`;
+                    result.className = 'result error';
+                }
+            } catch (error) {
+                result.textContent = `❌ Screenshot Analysis Error: ${error.message}`;
+                result.className = 'result error';
+            }
+        }
+        
+        async function testJarvisInit() {
+            const result = document.getElementById('jarvis-result');
+            result.textContent = 'Initializing JARVIS...';
+            
+            try {
+                // Load JARVIS scripts
+                if (!window.AudioStreamer) {
+                    await loadScript('js/audio-streamer.js');
+                }
+                if (!window.JarvisVoiceAssistant) {
+                    await loadScript('jarvis_voice_assistant.js');
+                }
+                
+                if (!window.jarvisAssistant) {
+                    window.jarvisAssistant = new JarvisVoiceAssistant();
+                    await window.jarvisAssistant.initialize();
+                }
+                
+                result.textContent = '✅ JARVIS initialized successfully';
+                result.className = 'result success';
+            } catch (error) {
+                result.textContent = `❌ JARVIS initialization error: ${error.message}`;
+                result.className = 'result error';
+            }
+        }
+        
+        async function testJarvisActivation() {
+            const result = document.getElementById('jarvis-result');
+            
+            if (!window.jarvisAssistant) {
+                result.textContent = '❌ JARVIS not initialized. Click "Initialize JARVIS" first.';
+                result.className = 'result error';
+                return;
+            }
+            
+            try {
+                result.textContent = 'Activating JARVIS...';
+                await window.jarvisAssistant.manualActivate();
+                
+                const status = window.jarvisAssistant.getStatus();
+                result.textContent = `✅ JARVIS activation status: ${JSON.stringify(status, null, 2)}`;
+                result.className = 'result success';
+            } catch (error) {
+                result.textContent = `❌ JARVIS activation error: ${error.message}`;
+                result.className = 'result error';
+            }
+        }
+        
+        async function testVisualAnalysis() {
+            const result = document.getElementById('jarvis-result');
+            
+            if (!window.jarvisAssistant) {
+                result.textContent = '❌ JARVIS not initialized. Click "Initialize JARVIS" first.';
+                result.className = 'result error';
+                return;
+            }
+            
+            try {
+                result.textContent = 'Triggering visual analysis...';
+                await window.jarvisAssistant.performVisualAnalysis();
+                
+                result.textContent = '✅ Visual analysis triggered successfully';
+                result.className = 'result success';
+            } catch (error) {
+                result.textContent = `❌ Visual analysis error: ${error.message}`;
+                result.className = 'result error';
+            }
+        }
+        
+        function loadScript(src) {
+            return new Promise((resolve, reject) => {
+                const script = document.createElement('script');
+                script.src = src;
+                script.onload = resolve;
+                script.onerror = reject;
+                document.head.appendChild(script);
+            });
+        }
+    </script>
+</body>
+</html>

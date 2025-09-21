@@ -232,36 +232,7 @@ class JarvisVoiceAssistant {
     
     async startJarvisSession() {
         try {
-            const jarvisSystemPrompt = `You are JARVIS, Tony Stark's AI assistant from Iron Man. You are sophisticated, helpful, and speak with British elegance and wit.
-
-PERSONALITY:
-- Speak with refined British accent and vocabulary
-- Be helpful but occasionally witty or sarcastic
-- Address the user as "Sir" or "Mr. Stark" 
-- Show intelligence and capability in your responses
-- Keep responses concise but informative
-
-CAPABILITIES:
-- You can analyze images and identify objects, components, and details
-- You have access to visual analysis when screenshots are provided
-- You can explain technical details about what you see
-- You understand 3D models, CAD designs, and engineering components
-
-CONVERSATION FLOW:
-1. When activated, greet the user: "Hello Sir, what can I do for you today?"
-2. Listen for requests like "What is this?" or "Analyze this"
-3. When asked about visual content, wait for image analysis results
-4. Provide detailed, intelligent explanations of what you observe
-5. Ask follow-up questions if clarification is needed
-
-RESPONSE STYLE:
-- Always maintain JARVIS's sophisticated tone
-- Be direct and informative
-- Use technical terminology when appropriate
-- Show confidence in your analysis
-- End conversations gracefully when dismissed
-
-Remember: You are an advanced AI assistant capable of visual analysis and technical explanation.`;
+            const jarvisSystemPrompt = `Your name is Jarvis, I will give you an image, tell me the augmented reality object classification in the image. Talk to me like a professional assistant, and be direct and informative. If you don't know exactly what something is, say you don't know.`;
 
             const setupMessage = {
                 setup: {
@@ -401,6 +372,17 @@ Remember: You are an advanced AI assistant capable of visual analysis and techni
         }
     }
     
+    // Add method to process user speech and check for visual analysis requests
+    async processUserSpeech(transcript) {
+        console.log('🎤 User said:', transcript);
+        
+        // Check if user is requesting visual analysis
+        if (this.isVisualAnalysisRequest(transcript)) {
+            console.log('👁️ User requesting visual analysis...');
+            await this.performVisualAnalysis();
+        }
+    }
+    
     async handleGeminiMessage(data) {
         try {
             // Handle Blob data
@@ -452,8 +434,8 @@ Remember: You are an advanced AI assistant capable of visual analysis and techni
                     if (part.text) {
                         console.log('🤖 JARVIS text:', part.text);
                         
-                        // Check if JARVIS is asking about visual content
-                        if (this.isVisualAnalysisRequest(part.text)) {
+                        // Check if JARVIS is asking about visual content OR responding to a visual request
+                        if (this.isVisualAnalysisRequest(part.text) || this.isJarvisAskingForImage(part.text)) {
                             console.log('👁️ JARVIS requesting visual analysis...');
                             await this.performVisualAnalysis();
                         }
@@ -491,6 +473,23 @@ Remember: You are an advanced AI assistant capable of visual analysis and techni
         return visualKeywords.some(keyword => lowerText.includes(keyword));
     }
     
+    isJarvisAskingForImage(text) {
+        const jarvisImageRequests = [
+            'provide the image',
+            'please provide the image',
+            'image you would like me to analyze',
+            'show me the image',
+            'send me the image',
+            'upload the image',
+            'i need to see',
+            'i cannot see',
+            'without an image'
+        ];
+        
+        const lowerText = text.toLowerCase();
+        return jarvisImageRequests.some(phrase => lowerText.includes(phrase));
+    }
+    
     async performVisualAnalysis() {
         try {
             if (this.isAnalyzing) {
@@ -501,19 +500,23 @@ Remember: You are an advanced AI assistant capable of visual analysis and techni
             this.isAnalyzing = true;
             this.updateUI('analyzing');
             
-            console.log('📸 Taking screenshot for visual analysis...');
+            console.log('📸 Analyzing saved screenshot from AR application...');
             
-            // Capture screenshot of current canvas/screen
-            const screenshot = await this.captureScreenshot();
+            // First try to analyze the saved screenshot from AR application
+            let analysis = await this.analyzeSavedScreenshot();
             
-            if (!screenshot) {
-                throw new Error('Failed to capture screenshot');
+            // If no saved screenshot, fall back to browser capture
+            if (!analysis) {
+                console.log('📸 No saved screenshot found, trying browser capture...');
+                // const screenshot = await this.captureScreenshot();
+                
+                // if (!screenshot) {
+                //     throw new Error('Failed to capture screenshot');
+                // }
+                
+                // console.log('🧠 Sending browser screenshot to Gemini Vision for analysis...');
+                // analysis = await this.analyzeWithGeminiVision(screenshot);
             }
-            
-            console.log('🧠 Sending screenshot to Gemini Vision for analysis...');
-            
-            // Analyze with Gemini Vision
-            const analysis = await this.analyzeWithGeminiVision(screenshot);
             
             if (analysis) {
                 console.log('✅ Visual analysis complete:', analysis.substring(0, 100) + '...');
@@ -525,8 +528,15 @@ Remember: You are an advanced AI assistant capable of visual analysis and techni
         } catch (error) {
             console.error('❌ Failed to perform visual analysis:', error);
             
-            // Send error message to JARVIS
-            const errorMessage = "I apologize, Sir, but I'm having difficulty with the visual analysis system at the moment.";
+            // Send appropriate error message to JARVIS
+            let errorMessage = "I apologize, Sir, but I'm having difficulty with the visual analysis system at the moment.";
+            
+            if (error.message && error.message.includes('quota')) {
+                errorMessage = "I'm afraid we've exceeded our daily API quota, Sir. The visual analysis system will be available again tomorrow, or you may upgrade the API plan for immediate access.";
+            } else if (error.message && error.message.includes('unauthorized')) {
+                errorMessage = "There appears to be an authentication issue with the vision system, Sir. Please check the API configuration.";
+            }
+            
             await this.sendAnalysisToJarvis(errorMessage);
             
         } finally {
@@ -588,6 +598,48 @@ Remember: You are an advanced AI assistant capable of visual analysis and techni
         }
     }
     
+    async analyzeSavedScreenshot() {
+        try {
+            // Get API base URL
+            const apiBaseUrl = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' ? 
+                'http://localhost:5001' : 'https://pitchperfect2-api-373812504656.asia-southeast1.run.app';
+            
+            console.log('🔍 Checking for saved screenshot from AR application...');
+            
+            const response = await fetch(`${apiBaseUrl}/api/jarvis/analyze-saved-screenshot`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            });
+            
+            if (!response.ok) {
+                if (response.status === 404) {
+                    console.log('📸 No saved screenshot found from AR application');
+                    return null;
+                }
+                throw new Error(`Saved screenshot API error: ${response.status}`);
+            }
+            
+            const data = await response.json();
+            
+            if (data.status === 'success') {
+                console.log('✅ Successfully analyzed saved screenshot from AR application');
+                return data.analysis;
+            } else {
+                const error = new Error(data.error || 'Saved screenshot analysis failed');
+                if (data.error_type === 'quota_exceeded') {
+                    error.message = 'quota: ' + data.error;
+                }
+                throw error;
+            }
+            
+        } catch (error) {
+            console.error('❌ Failed to analyze saved screenshot:', error);
+            return null;
+        }
+    }
+
     async analyzeWithGeminiVision(imageDataUrl) {
         try {
             // Convert data URL to base64

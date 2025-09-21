@@ -86,11 +86,28 @@ Respond as JARVIS would - sophisticated, detailed, and helpful. Be specific abou
             }
             
         except Exception as e:
-            print(f"❌ Error in image analysis: {str(e)}")
-            return {
-                "status": "error",
-                "error": str(e)
-            }
+            error_message = str(e)
+            print(f"❌ Error in image analysis: {error_message}")
+            
+            # Check for specific error types
+            if "429" in error_message or "quota" in error_message.lower():
+                return {
+                    "status": "error",
+                    "error": "API quota exceeded. Please wait or upgrade your Gemini API plan.",
+                    "error_type": "quota_exceeded"
+                }
+            elif "401" in error_message or "unauthorized" in error_message.lower():
+                return {
+                    "status": "error", 
+                    "error": "API key invalid or unauthorized.",
+                    "error_type": "auth_error"
+                }
+            else:
+                return {
+                    "status": "error",
+                    "error": error_message,
+                    "error_type": "general_error"
+                }
     
     def analyze_screenshot_for_jarvis(self, image_data: str) -> Dict[str, Any]:
         """
