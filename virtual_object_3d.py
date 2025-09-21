@@ -134,8 +134,8 @@ class VirtualObject3D:
             frame = renderer.render_points(frame, self.vertices, model_matrix, color)
         
         # Draw bounding box if grabbed
-        if self.is_grabbed:
-            frame = self._draw_bounding_box(frame, renderer, model_matrix)
+        # if self.is_grabbed:
+        #     frame = self._draw_bounding_box(frame, renderer, model_matrix)
         
         # Draw pinchable radius highlighting
         frame = self._draw_pinchable_radius(frame, renderer)

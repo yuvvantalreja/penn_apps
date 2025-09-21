@@ -313,9 +313,9 @@ class ARHandController:
         """Create initial virtual objects"""
         # 2D objects
         self.objects = [
-            VirtualObject(200, 200, 60, (0, 255, 255), "circle"),  # Yellow ball
-            VirtualObject(400, 300, 80, (255, 100, 100), "cube"),   # Blue cube
-            VirtualObject(600, 250, 50, (100, 255, 100), "circle"), # Green ball
+            # VirtualObject(200, 200, 60, (0, 255, 255), "circle"),  # Yellow ball
+            # VirtualObject(400, 300, 80, (255, 100, 100), "cube"),   # Blue cube
+            # VirtualObject(600, 250, 50, (100, 255, 100), "circle"), # Green ball
         ]
         
         # Initialize 3D objects list - will be populated with individual components from assemblies
