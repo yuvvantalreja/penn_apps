@@ -122,6 +122,16 @@ class HandGestureDetector:
                 hand_info = self._extract_hand_info(hand_landmarks, frame.shape)
                 hand_info['landmarks'] = hand_landmarks
                 hand_info['hand_idx'] = hand_idx
+                
+                # Add handedness information if available
+                if results.multi_handedness and hand_idx < len(results.multi_handedness):
+                    handedness = results.multi_handedness[hand_idx]
+                    hand_info['handedness'] = handedness.classification[0].label  # 'Left' or 'Right'
+                    hand_info['handedness_score'] = handedness.classification[0].score
+                else:
+                    hand_info['handedness'] = 'Unknown'
+                    hand_info['handedness_score'] = 0.0
+                
                 hands_info.append(hand_info)
                 
         return hands_info
@@ -329,15 +339,18 @@ class ARHandController:
         """Create initial virtual objects"""
         # 2D objects
         self.objects = [
-            VirtualObject(200, 200, 60, (0, 255, 255), "circle"),  # Yellow ball
-            VirtualObject(400, 300, 80, (255, 100, 100), "cube"),   # Blue cube
+            VirtualObject(200, 200, 60, (0, 255, 255), "circle"),  # Cyan ball
+            VirtualObject(400, 300, 80, (255, 100, 100), "cube"),   # Red cube
             VirtualObject(600, 250, 50, (100, 255, 100), "circle"), # Green ball
         ]
         
-        # Assign unique IDs to 2D objects
+        # Assign unique IDs to 2D objects - start all hidden
         for i, obj in enumerate(self.objects):
             obj.id = f"2d_{i}"
-            self.object_visibility[obj.id] = True
+            self.object_visibility[obj.id] = False  # Start hidden
+            # Move objects off-screen initially
+            obj.x = -1000  # Way off screen
+            obj.y = -1000
         
         # Initialize 3D objects list - will be populated with individual components from assemblies
         self.objects_3d = []
@@ -400,11 +413,16 @@ class ARHandController:
                     # Add all components to objects_3d for individual manipulation
                     for component in assembly.get_all_components():
                         component.set_render_mode("solid")
-                # Set different auto-rotation speeds for variety
+                        # Disable auto-rotation completely - only rotate in explicit rotation mode
+                        component.auto_rotate = False
                         component.auto_rotation_speed = 0.01 + len(self.objects_3d) * 0.005
-                        # Assign unique ID for dock management
+                        # Assign unique ID for dock management - start hidden
                         component.id = f"3d_{len(self.objects_3d)}"
-                        self.object_visibility[component.id] = True
+                        self.object_visibility[component.id] = False  # Start hidden
+                        # Move 3D objects off-screen initially
+                        component.x = -1000
+                        component.y = -1000
+                        component.z = -1000
                         self.objects_3d.append(component)
                     
                     print(f"✅ Loaded {assembly.get_assembly_info()}")
@@ -473,16 +491,16 @@ class ARHandController:
         print("- Multi-component CAD assembly support")
         print("- Individual component manipulation")
         print("- Each component can be moved, rotated, and scaled independently")
-        print("- Multi-axis 3D rotation (Yaw, Pitch, Roll)")
+        print("- Hand-specific single-axis 3D rotation")
         print("Gestures:")
         print("- Pinch (thumb + index) near object: Grab object or component")
         print("- Move hand while pinching: Move object/component (improved 3D tracking!)")
         print("- Grab object with TWO hands and move apart/closer: Scale object/component")
-        print("- Two hands then release one: Enter multi-axis rotation mode")
+        print("- Two hands then release one: Enter hand-specific rotation mode")
         print("- In rotation mode:")
-        print("  • Move horizontally: Yaw rotation (Y-axis)")
-        print("  • Move vertically: Pitch rotation (X-axis)")
-        print("  • Move diagonally: Roll rotation (Z-axis)")
+        print("  • RIGHT HAND: Controls X-axis rotation (pitch) - move up/down")
+        print("  • LEFT HAND: Controls Y-axis rotation (yaw) - move left/right")
+        print("  • Unknown hand: Falls back to multi-axis rotation")
         print("Controls:")
         print("- Press 'q' to quit")
         print("- Press 'r' to reset objects")
@@ -579,8 +597,8 @@ class ARHandController:
                 if self.object_visibility.get(obj_3d.id, True):
                     for hand_info in hands_info:
                         if (hand_info['is_pinching'] and 
-                        not obj_3d.is_grabbed and 
-                        obj_3d.is_point_inside(hand_info['pinch_center'][0], hand_info['pinch_center'][1], self.renderer_3d)):
+                            not obj_3d.is_grabbed and 
+                            obj_3d.is_point_inside(hand_info['pinch_center'][0], hand_info['pinch_center'][1], self.renderer_3d)):
                             
                             screen_pos = obj_3d.get_screen_position(self.renderer_3d)
                             if screen_pos:
@@ -804,12 +822,13 @@ class ARHandController:
                                 obj_3d.is_in_rotation_mode = True
                                 obj_3d.rotation_hand_idx = hand_idx
                                 
-                                # Get initial position of rotation hand
+                                # Get initial position of rotation hand and store handedness
                                 rotation_hand_info = next((hand for hand in hands_info if hand['hand_idx'] == hand_idx), None)
                                 if rotation_hand_info:
                                     obj_3d.last_rotation_hand_pos = rotation_hand_info['palm_center']
+                                    obj_3d.rotation_hand_type = rotation_hand_info.get('handedness', 'Unknown')
                                 
-                                print(f"Object entered multi-axis rotation mode - Hand {hand_idx} controlling rotation")
+                                print(f"Object entered rotation mode - {obj_3d.rotation_hand_type} hand {hand_idx} controlling rotation")
                                 
                                 # Remove this hand from grabbed_by_hand but keep it in grab_states_3d for rotation tracking
                                 if hand_idx in obj_3d.grabbed_by_hand:
@@ -821,6 +840,14 @@ class ARHandController:
                                     del grab_state['initial_two_hand_distance']
                                 if 'initial_scale' in grab_state:
                                     del grab_state['initial_scale']
+                                
+                                # Clear locked rotation state
+                                if 'locked_rotation_x' in grab_state:
+                                    del grab_state['locked_rotation_x']
+                                if 'locked_rotation_y' in grab_state:
+                                    del grab_state['locked_rotation_y']
+                                if 'locked_rotation_z' in grab_state:
+                                    del grab_state['locked_rotation_z']
                                 
                                 # Don't delete from grab_states_3d - keep for rotation tracking
                                 continue
@@ -842,6 +869,7 @@ class ARHandController:
                         obj_3d.is_in_rotation_mode = False
                         obj_3d.rotation_hand_idx = None
                         obj_3d.last_rotation_hand_pos = None
+                        obj_3d.rotation_hand_type = None
                     
                     # Reset scaling state if transitioning from two-hand to one-hand or no hands
                     if obj_3d.is_grabbed < 2:
@@ -853,6 +881,13 @@ class ARHandController:
                                     del other_hand_state['initial_two_hand_distance']
                                 if 'initial_scale' in other_hand_state:
                                     del other_hand_state['initial_scale']
+                                # Clear locked rotation state
+                                if 'locked_rotation_x' in other_hand_state:
+                                    del other_hand_state['locked_rotation_x']
+                                if 'locked_rotation_y' in other_hand_state:
+                                    del other_hand_state['locked_rotation_y']
+                                if 'locked_rotation_z' in other_hand_state:
+                                    del other_hand_state['locked_rotation_z']
                     
                     # Only delete if the hand is still in grab_states_3d (might have been removed by rotation mode logic)
                     if hand_idx in self.grab_states_3d:
@@ -910,6 +945,13 @@ class ARHandController:
                                 del other_hand_state['initial_two_hand_distance']
                             if 'initial_scale' in other_hand_state:
                                 del other_hand_state['initial_scale']
+                            # Clear locked rotation state
+                            if 'locked_rotation_x' in other_hand_state:
+                                del other_hand_state['locked_rotation_x']
+                            if 'locked_rotation_y' in other_hand_state:
+                                del other_hand_state['locked_rotation_y']
+                            if 'locked_rotation_z' in other_hand_state:
+                                del other_hand_state['locked_rotation_z']
                 
                 hands_to_remove_3d.append(hand_idx)
         
@@ -1135,15 +1177,16 @@ class ARHandController:
         obj_3d.is_in_rotation_mode = True
         obj_3d.rotation_hand_idx = rotation_hand
         
-        # Get initial position of rotation hand
+        # Get initial position of rotation hand and store handedness
         rotation_hand_info = next((hand for hand in hands_info if hand['hand_idx'] == rotation_hand), None)
         if rotation_hand_info:
             obj_3d.last_rotation_hand_pos = rotation_hand_info['palm_center']
+            obj_3d.rotation_hand_type = rotation_hand_info.get('handedness', 'Unknown')
         
-        print(f"Object entered multi-axis rotation mode - Hand {rotation_hand} controlling rotation")
+        print(f"Object entered rotation mode - {obj_3d.rotation_hand_type} hand {rotation_hand} controlling rotation")
     
     def _handle_rotation_mode_3d(self, hands_info: List[dict]):
-        """Handle rotation mode for 3D objects with multi-axis support"""
+        """Handle rotation mode for 3D objects with hand-specific single-axis rotation"""
         for obj_3d in self.objects_3d:
             if obj_3d.is_in_rotation_mode and obj_3d.rotation_hand_idx is not None:
                 # Get current position of rotation hand
@@ -1157,45 +1200,37 @@ class ARHandController:
                     delta_x = current_pos[0] - last_pos[0]  # Horizontal movement
                     delta_y = current_pos[1] - last_pos[1]  # Vertical movement
                     
-                    rotation_sensitivity = 0.01  # Base rotation speed
-                    movement_threshold = 5  # Minimum movement threshold
+                    rotation_sensitivity = 0.015  # Increased sensitivity for single-axis rotation
+                    movement_threshold = 3  # Lower threshold for more responsive rotation
                     
-                    # Apply Y-axis rotation based on horizontal movement (yaw)
-                    if abs(delta_x) > movement_threshold:
-                        # Invert rotation direction: left movement = clockwise, right movement = counter-clockwise
-                        obj_3d.rotation_y -= delta_x * rotation_sensitivity
-                        
-                        # Keep rotation in reasonable range
-                        obj_3d.rotation_y = obj_3d.rotation_y % (2 * math.pi)
+                    # Get handedness for this rotation hand
+                    hand_type = getattr(obj_3d, 'rotation_hand_type', 'Unknown')
                     
-                    # Apply X-axis rotation based on vertical movement (pitch)
-                    if abs(delta_y) > movement_threshold:
-                        # Natural direction: up movement = rotate up, down movement = rotate down
-                        obj_3d.rotation_x -= delta_y * rotation_sensitivity
-                        
-                        # Keep rotation in reasonable range
-                        obj_3d.rotation_x = obj_3d.rotation_x % (2 * math.pi)
+                    # Apply hand-specific single-axis rotation
+                    if hand_type == 'Right':
+                        # Right hand controls X-axis rotation (pitch)
+                        if abs(delta_y) > movement_threshold:
+                            # Natural direction: up movement = rotate up, down movement = rotate down
+                            obj_3d.rotation_x -= delta_y * rotation_sensitivity
+                            # Keep rotation in reasonable range
+                            obj_3d.rotation_x = obj_3d.rotation_x % (2 * math.pi)
                     
-                    # Apply Z-axis rotation based on diagonal movement (roll)
-                    # Calculate diagonal movement magnitude and direction
-                    movement_magnitude = math.sqrt(delta_x**2 + delta_y**2)
-                    if movement_magnitude > movement_threshold:
-                        # Use the cross product concept - if moving diagonally, apply roll
-                        # This creates roll when moving in diagonal directions
-                        diagonal_threshold = movement_threshold * 1.5  # Require more diagonal movement
-                        
-                        if abs(delta_x) > movement_threshold and abs(delta_y) > movement_threshold:
-                            # Diagonal movement detected - apply roll
-                            # Roll direction based on diagonal quadrant
-                            if (delta_x > 0 and delta_y > 0) or (delta_x < 0 and delta_y < 0):
-                                # Top-right or bottom-left diagonal - positive roll
-                                roll_factor = movement_magnitude * 0.005  # Smaller sensitivity for roll
-                            else:
-                                # Top-left or bottom-right diagonal - negative roll
-                                roll_factor = -movement_magnitude * 0.005
-                            
-                            obj_3d.rotation_z += roll_factor
-                            obj_3d.rotation_z = obj_3d.rotation_z % (2 * math.pi)
+                    elif hand_type == 'Left':
+                        # Left hand controls Y-axis rotation (yaw)
+                        if abs(delta_x) > movement_threshold:
+                            # Natural direction: left movement = counter-clockwise, right movement = clockwise
+                            obj_3d.rotation_y -= delta_x * rotation_sensitivity
+                            # Keep rotation in reasonable range
+                            obj_3d.rotation_y = obj_3d.rotation_y % (2 * math.pi)
+                    
+                    else:
+                        # Unknown hand type - fallback to original multi-axis behavior
+                        if abs(delta_x) > movement_threshold:
+                            obj_3d.rotation_y -= delta_x * rotation_sensitivity
+                            obj_3d.rotation_y = obj_3d.rotation_y % (2 * math.pi)
+                        if abs(delta_y) > movement_threshold:
+                            obj_3d.rotation_x -= delta_y * rotation_sensitivity
+                            obj_3d.rotation_x = obj_3d.rotation_x % (2 * math.pi)
                     
                     # Update last position
                     obj_3d.last_rotation_hand_pos = current_pos
@@ -1212,7 +1247,8 @@ class ARHandController:
         obj_3d.is_in_rotation_mode = False
         obj_3d.rotation_hand_idx = None
         obj_3d.last_rotation_hand_pos = None
-        print(f"Object exited multi-axis rotation mode")
+        obj_3d.rotation_hand_type = None
+        print(f"Object exited rotation mode")
                 
     
     def _handle_pinch_interaction_3d(self, hand_info: dict, hand_idx: int) -> bool:
@@ -1277,14 +1313,29 @@ class ARHandController:
             movement_threshold = 0.5  # pixels - minimum movement to trigger object movement (reduced for better responsiveness)
             
             if movement_magnitude > movement_threshold:
-                # Convert screen movement to world space movement
-                sensitivity = grab_state['movement_sensitivity']
-                world_delta_x = pinch_delta_x * sensitivity
-                world_delta_y = -pinch_delta_y * sensitivity  # Invert Y for correct direction
-                
-                # Apply movement directly without smoothing for immediate response
-                obj_3d.x += world_delta_x
-                obj_3d.y += world_delta_y
+                # Only allow position changes during normal movement - NO ROTATION
+                # Ensure object is not in rotation mode before allowing position changes
+                if not obj_3d.is_in_rotation_mode:
+                    # Convert screen movement to world space movement
+                    sensitivity = grab_state['movement_sensitivity']
+                    world_delta_x = pinch_delta_x * sensitivity
+                    world_delta_y = -pinch_delta_y * sensitivity  # Invert Y for correct direction
+                    
+                    # Apply movement directly without smoothing for immediate response
+                    obj_3d.x += world_delta_x
+                    obj_3d.y += world_delta_y
+                    
+                    # Explicitly lock rotation during normal movement
+                    # Store current rotation to prevent any drift
+                    if 'locked_rotation_x' not in grab_state:
+                        grab_state['locked_rotation_x'] = obj_3d.rotation_x
+                        grab_state['locked_rotation_y'] = obj_3d.rotation_y
+                        grab_state['locked_rotation_z'] = obj_3d.rotation_z
+                    
+                    # Force rotation to stay locked
+                    obj_3d.rotation_x = grab_state['locked_rotation_x']
+                    obj_3d.rotation_y = grab_state['locked_rotation_y']
+                    obj_3d.rotation_z = grab_state['locked_rotation_z']
             
             
             # Track finger positions for better interaction feedback
@@ -1308,7 +1359,10 @@ class ARHandController:
         
         new_obj = VirtualObject(x, y, size, color, shape)
         new_obj.id = f"2d_{len(self.objects)}"
-        self.object_visibility[new_obj.id] = True
+        self.object_visibility[new_obj.id] = False  # Start hidden
+        # Move off-screen initially
+        new_obj.x = -1000
+        new_obj.y = -1000
         self.objects.append(new_obj)
     
     def _draw_ui(self, frame: np.ndarray, hands_info: List[dict]) -> np.ndarray:
@@ -2243,22 +2297,41 @@ class ARHandController:
                                 cv2.line(frame, end_point, (arrow_x1, arrow_y1), rotation_color, 2)
                                 cv2.line(frame, end_point, (arrow_x2, arrow_y2), rotation_color, 2)
                     
+                    # Get hand type and create appropriate label
+                    hand_type = getattr(obj_3d, 'rotation_hand_type', 'Unknown')
+                    if hand_type == 'Right':
+                        label_text = "RIGHT: X-AXIS"
+                        axis_text = "(PITCH)"
+                    elif hand_type == 'Left':
+                        label_text = "LEFT: Y-AXIS"
+                        axis_text = "(YAW)"
+                    else:
+                        label_text = "ROTATE"
+                        axis_text = "(MULTI-AXIS)"
+                    
                     # Elegant label with glass background
-                    label_text = "ROTATE"
-                    label_w, label_h = 80, 25
+                    label_w, label_h = 120, 35
                     label_x = hand_center[0] - label_w // 2
-                    label_y = hand_center[1] - 55
+                    label_y = hand_center[1] - 60
                     
                     # Glass background for label
                     self._draw_glass_panel(frame, (label_x, label_y - label_h), (label_w, label_h), alpha=0.3)
                     
-                    # Label text
-                    text_size = cv2.getTextSize(label_text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)[0]
+                    # Main label text
+                    text_size = cv2.getTextSize(label_text, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)[0]
                     text_x = label_x + (label_w - text_size[0]) // 2
-                    text_y = label_y - 8
+                    text_y = label_y - 18
                     
                     cv2.putText(frame, label_text, (text_x, text_y), 
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, rotation_color, 1)
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.45, rotation_color, 1)
+                    
+                    # Axis description text
+                    axis_size = cv2.getTextSize(axis_text, cv2.FONT_HERSHEY_SIMPLEX, 0.35, 1)[0]
+                    axis_x = label_x + (label_w - axis_size[0]) // 2
+                    axis_y = label_y - 5
+                    
+                    cv2.putText(frame, axis_text, (axis_x, axis_y), 
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.35, (180, 180, 180), 1)
         
         return frame
     
@@ -2267,6 +2340,490 @@ class ARHandController:
         if self.cap:
             self.cap.release()
         cv2.destroyAllWindows()
+
+    def _draw_capsule_dock(self, frame: np.ndarray, hands_info: List[dict]):
+        """Draw Apple-inspired capsule dock with all objects"""
+        h, w = frame.shape[:2]
+        
+        # Collect all objects (2D and 3D)
+        all_objects = []
+        
+        # Add 2D objects
+        for obj in self.objects:
+            all_objects.append({
+                'id': obj.id,
+                'type': '2D',
+                'color': obj.color,
+                'shape': obj.shape,
+                'object': obj
+            })
+        
+        # Add 3D objects
+        for obj in self.objects_3d:
+            all_objects.append({
+                'id': obj.id,
+                'type': '3D',
+                'color': obj.color,
+                'shape': 'model',
+                'object': obj
+            })
+        
+        if not all_objects:
+            return
+        
+        # Dock dimensions - much more spaced out
+        dock_height = 120
+        dock_padding = 40
+        item_size = 80
+        item_spacing = 50  # Much more space between dots
+        dock_width = len(all_objects) * (item_size + item_spacing) - item_spacing + dock_padding * 2
+        
+        # Center dock horizontally and position higher from bottom
+        dock_x = (w - dock_width) // 2
+        dock_y = h - dock_height - 60
+        
+        # Draw main capsule background with glassmorphism
+        self._draw_capsule_background(frame, dock_x, dock_y, dock_width, dock_height)
+        
+        # Draw object thumbnails
+        for i, obj_info in enumerate(all_objects):
+            item_x = dock_x + dock_padding + i * (item_size + item_spacing)
+            item_y = dock_y + (dock_height - item_size) // 2
+            
+            self._draw_object_thumbnail(frame, item_x, item_y, item_size, obj_info)
+        
+        # Handle dock interactions
+        self._handle_dock_interactions(frame, hands_info, all_objects, dock_x, dock_y, dock_width, dock_height, item_size, item_spacing)
+        
+        # Clean up old dock states for hands that are no longer detected
+        self._cleanup_dock_states(hands_info)
+    
+    def _draw_capsule_background(self, frame: np.ndarray, x: int, y: int, width: int, height: int):
+        """Draw the capsule-shaped dock background"""
+        # Create mask for rounded rectangle
+        overlay = frame.copy()
+        
+        # Draw rounded rectangle using circles and rectangle
+        radius = height // 2
+        
+        # Main rectangle
+        cv2.rectangle(overlay, (x + radius, y), (x + width - radius, y + height), (40, 40, 40), -1)
+        
+        # Left semicircle
+        cv2.circle(overlay, (x + radius, y + radius), radius, (40, 40, 40), -1)
+        
+        # Right semicircle  
+        cv2.circle(overlay, (x + width - radius, y + radius), radius, (40, 40, 40), -1)
+        
+        # Apply glassmorphism effect
+        cv2.addWeighted(overlay, 0.3, frame, 0.7, 0, frame)
+        
+        # Add subtle border
+        cv2.rectangle(frame, (x + radius, y), (x + width - radius, y + height), (100, 100, 100), 1)
+        cv2.circle(frame, (x + radius, y + radius), radius, (100, 100, 100), 1)
+        cv2.circle(frame, (x + width - radius, y + radius), radius, (100, 100, 100), 1)
+    
+    def _draw_object_thumbnail(self, frame: np.ndarray, x: int, y: int, size: int, obj_info: dict):
+        """Draw individual object thumbnail in dock"""
+        center_x = x + size // 2
+        center_y = y + size // 2
+        
+        # Determine colors based on ACTUAL visibility state from object_visibility dict
+        actual_visibility = self.object_visibility.get(obj_info['id'], True)
+        
+        if actual_visibility:
+            # Object is visible in scene - lights ON (full brightness)
+            base_color = obj_info['color']
+            border_color = (200, 200, 200)
+        else:
+            # Object is hidden in scene - lights OFF (dimmed)
+            base_color = tuple(int(c * 0.3) for c in obj_info['color'])
+            border_color = (80, 80, 80)
+        
+        # Draw thumbnail background
+        thumbnail_size = size - 10
+        thumbnail_radius = thumbnail_size // 2
+        
+        # Glassmorphism background
+        overlay = frame.copy()
+        cv2.circle(overlay, (center_x, center_y), thumbnail_radius, base_color, -1)
+        cv2.addWeighted(overlay, 0.6, frame, 0.4, 0, frame)
+        
+        # Draw shape indicator
+        if obj_info['shape'] == 'circle':
+            cv2.circle(frame, (center_x, center_y), thumbnail_radius - 8, base_color, 2)
+        elif obj_info['shape'] == 'cube':
+            rect_size = thumbnail_radius - 8
+            cv2.rectangle(frame, 
+                         (center_x - rect_size, center_y - rect_size),
+                         (center_x + rect_size, center_y + rect_size),
+                         base_color, 2)
+        else:  # 3D model
+            # Draw 3D indicator (diamond shape)
+            points = np.array([
+                [center_x, center_y - thumbnail_radius + 8],
+                [center_x + thumbnail_radius - 8, center_y],
+                [center_x, center_y + thumbnail_radius - 8],
+                [center_x - thumbnail_radius + 8, center_y]
+            ], np.int32)
+            cv2.polylines(frame, [points], True, base_color, 2)
+        
+        # Draw border
+        cv2.circle(frame, (center_x, center_y), thumbnail_radius, border_color, 2)
+        
+        # Add type indicator with larger text for bigger dock
+        type_text = obj_info['type']
+        text_size = cv2.getTextSize(type_text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)[0]
+        text_x = center_x - text_size[0] // 2
+        text_y = center_y + size // 2 + 25  # More space for larger dock
+        
+        cv2.putText(frame, type_text, (text_x, text_y), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, border_color, 1)
+    
+    def _handle_dock_interactions(self, frame: np.ndarray, hands_info: List[dict], all_objects: list,
+                                 dock_x: int, dock_y: int, dock_width: int, dock_height: int,
+                                 item_size: int, item_spacing: int):
+        """Handle pinch interactions with dock items"""
+        dock_padding = 40  # Updated padding to match dock
+        current_time = time.time()
+        
+        # Handle drag interactions (both single and two-hand)
+        self._handle_dock_drag_interactions(hands_info, all_objects, dock_x, dock_y, dock_width, dock_height, item_size, item_spacing, frame)
+
+    def _handle_dock_drag_interactions(self, hands_info: List[dict], all_objects: list,
+                                      dock_x: int, dock_y: int, dock_width: int, dock_height: int,
+                                      item_size: int, item_spacing: int, frame: np.ndarray):
+        """Handle drag interactions - single hand shows model, two hands isolate"""
+        dock_padding = 40  # Updated padding to match dock
+        current_time = time.time()
+        
+        # Process each hand
+        for hand_info in hands_info:
+            hand_idx = hand_info['hand_idx']
+            is_pinching = hand_info['is_pinching']
+            pinch_pos = hand_info['pinch_center']
+            
+            if is_pinching:
+                # Check if starting a new drag from dock
+                if hand_idx not in self.drag_states:
+                    # Check if pinch started in dock area
+                    if (dock_x <= pinch_pos[0] <= dock_x + dock_width and 
+                        dock_y <= pinch_pos[1] <= dock_y + dock_height):
+                        
+                        # Find which dock item is being targeted
+                        target_object_id = None
+                        dock_item_pos = None
+                        
+                        for i, obj_info in enumerate(all_objects):
+                            item_x = dock_x + dock_padding + i * (item_size + item_spacing)
+                            item_center_x = item_x + item_size // 2
+                            item_center_y = dock_y + dock_height // 2
+                            
+                            distance = math.sqrt((pinch_pos[0] - item_center_x)**2 + (pinch_pos[1] - item_center_y)**2)
+                            
+                            if distance <= item_size // 2:
+                                target_object_id = obj_info['id']
+                                dock_item_pos = (item_center_x, item_center_y)
+                                break
+                        
+                        if target_object_id:
+                            # Start drag state
+                            self.drag_states[hand_idx] = {
+                                'object_id': target_object_id,
+                                'start_pos': pinch_pos,
+                                'current_pos': pinch_pos,
+                                'is_dragging': False,
+                                'dock_pos': dock_item_pos
+                            }
+                
+                # Update existing drag state
+                if hand_idx in self.drag_states:
+                    drag_state = self.drag_states[hand_idx]
+                    drag_state['current_pos'] = pinch_pos
+                    
+                    # Calculate distance from start position
+                    start_pos = drag_state['start_pos']
+                    drag_distance = math.sqrt((pinch_pos[0] - start_pos[0])**2 + (pinch_pos[1] - start_pos[1])**2)
+                    
+                    # Check if dragging has started
+                    if not drag_state['is_dragging'] and drag_distance > self.drag_threshold:
+                        drag_state['is_dragging'] = True
+                        print(f"Started dragging {drag_state['object_id']}")
+                    
+                    # If dragging, check distance from dock
+                    if drag_state['is_dragging']:
+                        dock_distance = math.sqrt((pinch_pos[0] - dock_x - dock_width/2)**2 + (pinch_pos[1] - dock_y - dock_height/2)**2)
+                        
+                        if dock_distance > self.drag_out_threshold:
+                            # Far enough from dock - activate model
+                            self._activate_dragged_model(drag_state['object_id'], hands_info)
+                        
+                        # Draw dragged dot
+                        self._draw_dragged_dot(frame, drag_state, all_objects, item_size)
+            
+            else:
+                # Released pinch - handle drop or toggle
+                if hand_idx in self.drag_states:
+                    drag_state = self.drag_states[hand_idx]
+                    
+                    if drag_state['is_dragging']:
+                        # This was a drag operation - place object
+                        hands_dragging_this = sum(1 for ds in self.drag_states.values() 
+                                                 if ds['object_id'] == drag_state['object_id'] and ds['is_dragging'])
+                        
+                        if hands_dragging_this >= 2:
+                            # Two hands - place object at center between the two drag points
+                            self._place_object_at_isolation_center(drag_state['object_id'])
+                        else:
+                            # Single hand - place object where dot was dropped
+                            self._place_object_at_drop_position(drag_state['object_id'], drag_state['current_pos'])
+                        
+                        print(f"Dropped {drag_state['object_id']} - placed in scene")
+                    else:
+                        # This was just a pinch (no drag) - toggle visibility
+                        self._toggle_object_with_placement(drag_state['object_id'])
+                    
+                    # Remove drag state
+                    del self.drag_states[hand_idx]
+    
+    def _activate_dragged_model(self, object_id: str, hands_info: List[dict]):
+        """Prepare model for drag interaction - DO NOT show until dropped"""
+        # Count how many hands are dragging this same object
+        hands_dragging_this = 0
+        for drag_state in self.drag_states.values():
+            if drag_state['object_id'] == object_id and drag_state['is_dragging']:
+                hands_dragging_this += 1
+        
+        # Don't actually activate/show anything during drag
+        # Objects will only be shown when dropped via _place_object_at_drop_position
+        # or _place_object_at_isolation_center methods
+        print(f"Preparing {object_id} for placement ({'isolate' if hands_dragging_this >= 2 else 'show'} mode)")
+    
+    def _draw_dragged_dot(self, frame: np.ndarray, drag_state: dict, all_objects: list, item_size: int):
+        """Draw the dragged dot following the hand"""
+        current_pos = drag_state['current_pos']
+        object_id = drag_state['object_id']
+        
+        # Find object info
+        obj_info = None
+        for obj in all_objects:
+            if obj['id'] == object_id:
+                obj_info = obj
+                break
+        
+        if not obj_info:
+            return
+        
+        # Draw dot at current position
+        dot_radius = item_size // 4
+        
+        # Determine color based on drag distance and number of hands
+        hands_on_this = sum(1 for ds in self.drag_states.values() 
+                           if ds['object_id'] == object_id and ds['is_dragging'])
+        
+        if hands_on_this >= 2:
+            # Two hands - isolation mode color
+            color = (255, 200, 100)  # Orange
+            border_color = (255, 150, 50)
+            text = "ISOLATE"
+        else:
+            # Single hand - show model color
+            color = obj_info['color']
+            border_color = (255, 255, 255)
+            text = "SHOW"
+        
+        # Draw main dot
+        cv2.circle(frame, current_pos, dot_radius, color, -1)
+        cv2.circle(frame, current_pos, dot_radius, border_color, 2)
+        
+        # Draw connection line back to dock
+        dock_pos = drag_state['dock_pos']
+        cv2.line(frame, current_pos, dock_pos, (150, 150, 150), 1)
+        
+        # Draw text indicator
+        text_size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)[0]
+        text_pos = (current_pos[0] - text_size[0] // 2, current_pos[1] - dot_radius - 10)
+        cv2.putText(frame, text, text_pos, cv2.FONT_HERSHEY_SIMPLEX, 0.4, border_color, 1)
+    
+    def _place_object_at_drop_position(self, object_id: str, drop_position: tuple):
+        """Place object at the dropped position in 3D space"""
+        # Convert screen coordinates to world coordinates
+        coords = self._screen_to_world_coordinates(drop_position)
+        world_x_2d, world_y_2d, world_x_3d, world_y_3d, world_z_3d = coords
+        
+        # Find and move the object, then make it visible
+        for obj in self.objects:
+            if obj.id == object_id:
+                obj.x, obj.y = world_x_2d, world_y_2d
+                self.object_visibility[object_id] = True  # Make visible after placement
+                print(f"Placed 2D object {object_id} at screen {drop_position} -> world ({world_x_2d:.2f}, {world_y_2d:.2f})")
+                return
+        
+        for obj_3d in self.objects_3d:
+            if obj_3d.id == object_id:
+                obj_3d.x, obj_3d.y, obj_3d.z = world_x_3d, world_y_3d, world_z_3d
+                self.object_visibility[object_id] = True  # Make visible after placement
+                print(f"Placed 3D object {object_id} at screen {drop_position} -> world ({world_x_3d:.3f}, {world_y_3d:.3f}, {world_z_3d:.1f})")
+                return
+    
+    def _place_object_at_isolation_center(self, object_id: str):
+        """Place object at center between two isolation drag points"""
+        # Find all drag states for this object
+        drag_positions = []
+        for drag_state in self.drag_states.values():
+            if drag_state['object_id'] == object_id and drag_state['is_dragging']:
+                drag_positions.append(drag_state['current_pos'])
+        
+        if len(drag_positions) >= 2:
+            # Calculate center point between the drag positions
+            center_x = sum(pos[0] for pos in drag_positions) // len(drag_positions)
+            center_y = sum(pos[1] for pos in drag_positions) // len(drag_positions)
+            center_position = (center_x, center_y)
+            
+            # Convert to world coordinates and place object
+            coords = self._screen_to_world_coordinates(center_position)
+            world_x_2d, world_y_2d, world_x_3d, world_y_3d, world_z_3d = coords
+            
+            # Find and move the object, then enter isolation mode properly
+            for obj in self.objects:
+                if obj.id == object_id:
+                    obj.x, obj.y = world_x_2d, world_y_2d
+                    self._enter_isolation_mode_proper(object_id)  # This handles visibility
+                    print(f"Placed 2D object {object_id} at isolation center {center_position} -> world ({world_x_2d:.2f}, {world_y_2d:.2f})")
+                    return
+            
+            for obj_3d in self.objects_3d:
+                if obj_3d.id == object_id:
+                    obj_3d.x, obj_3d.y, obj_3d.z = world_x_3d, world_y_3d, world_z_3d
+                    self._enter_isolation_mode_proper(object_id)  # This handles visibility
+                    print(f"Placed 3D object {object_id} at isolation center {center_position} -> world ({world_x_3d:.3f}, {world_y_3d:.3f}, {world_z_3d:.1f})")
+                    return
+    
+    def _screen_to_world_coordinates(self, screen_pos: tuple) -> tuple:
+        """Convert screen coordinates to 3D world coordinates"""
+        screen_x, screen_y = screen_pos
+        
+        # Get frame dimensions
+        if hasattr(self, 'renderer_3d'):
+            frame_width = self.renderer_3d.width
+            frame_height = self.renderer_3d.height
+        else:
+            frame_width = 1280  # Default width
+            frame_height = 720   # Default height
+        
+        # Map screen coordinates to world coordinates
+        # Center of screen maps to world (0, 0)
+        # Scale factors adjusted for better object placement
+        
+        # For 2D objects - they use direct pixel coordinates, so use 1:1 mapping
+        scale_factor_2d = 1.0  # 2D objects use screen coordinates directly
+        
+        # For 3D objects - use smaller scale for precise placement  
+        scale_factor_3d = 0.005  # 3D objects move less, more precise
+        
+        # Calculate relative position from screen center
+        rel_x = screen_x - frame_width / 2
+        rel_y = screen_y - frame_height / 2
+        
+        # For 2D objects - use direct screen coordinates (no conversion needed)
+        world_x_2d = screen_x
+        world_y_2d = screen_y
+        
+        # For 3D objects - convert screen to world coordinates
+        world_x_3d = rel_x * scale_factor_3d
+        world_y_3d = -rel_y * scale_factor_3d  # Invert Y axis
+        world_z_3d = -3.0  # Place 3D objects at reasonable depth
+        
+        # Return both 2D and 3D coordinates (caller will use appropriate ones)
+        return (world_x_2d, world_y_2d, world_x_3d, world_y_3d, world_z_3d)
+    
+    def _cleanup_dock_states(self, hands_info: List[dict]):
+        """Clean up dock interaction states for hands that are no longer detected"""
+        current_hand_indices = {hand['hand_idx'] for hand in hands_info}
+        
+        # Clean up drag states
+        hands_to_remove = []
+        for hand_idx in self.drag_states:
+            if hand_idx not in current_hand_indices:
+                hands_to_remove.append(hand_idx)
+        
+        for hand_idx in hands_to_remove:
+            print(f"Cleaning up drag state for disappeared hand {hand_idx}")
+            del self.drag_states[hand_idx]
+        
+        # Clean up dock pinch states
+        hands_to_remove = []
+        for hand_idx in self.dock_pinch_states:
+            if hand_idx not in current_hand_indices:
+                hands_to_remove.append(hand_idx)
+        
+        for hand_idx in hands_to_remove:
+            del self.dock_pinch_states[hand_idx]
+        
+        # Clean up dock interaction states
+        hands_to_remove = []
+        for hand_idx in self.dock_interaction_state:
+            if hand_idx not in current_hand_indices:
+                hands_to_remove.append(hand_idx)
+        
+        for hand_idx in hands_to_remove:
+            del self.dock_interaction_state[hand_idx]
+    
+    def _toggle_object_visibility(self, object_id: str):
+        """Toggle object visibility in the scene"""
+        if object_id in self.object_visibility:
+            self.object_visibility[object_id] = not self.object_visibility[object_id]
+            print(f"Toggled {object_id}: {'ON' if self.object_visibility[object_id] else 'OFF'}")
+    
+    def _toggle_object_with_placement(self, object_id: str):
+        """Toggle object visibility - if turning on, place at center; if turning off, hide"""
+        current_visibility = self.object_visibility.get(object_id, True)
+        
+        if current_visibility:
+            # Currently visible - turn off
+            self.object_visibility[object_id] = False
+            print(f"Turned off {object_id}")
+        else:
+            # Currently hidden - turn on and place at center
+            self.object_visibility[object_id] = True
+            self._place_object_at_center(object_id)
+            print(f"Turned on {object_id} and placed at center")
+    
+    def _place_object_at_center(self, object_id: str):
+        """Place object at screen center"""
+        # Get frame dimensions for center calculation
+        if hasattr(self, 'renderer_3d'):
+            center_x = self.renderer_3d.width // 2
+            center_y = self.renderer_3d.height // 2
+        else:
+            center_x = 640  # Default center
+            center_y = 360
+        
+        # Find and move the object to center
+        for obj in self.objects:
+            if obj.id == object_id:
+                obj.x, obj.y = center_x, center_y
+                print(f"Placed 2D object {object_id} at center ({center_x}, {center_y})")
+                return
+        
+        for obj_3d in self.objects_3d:
+            if obj_3d.id == object_id:
+                # For 3D objects, place at world center
+                obj_3d.x, obj_3d.y, obj_3d.z = 0.0, 0.0, -3.0
+                print(f"Placed 3D object {object_id} at world center (0, 0, -3)")
+                return
+    
+    def _enter_isolation_mode_proper(self, object_id: str):
+        """Enter isolation mode - turn off all other objects, turn on selected object"""
+        # Always enter isolation mode with this specific object
+        self.object_isolation_mode = True
+        self.isolated_object_id = object_id
+        
+        # Turn off all objects, then turn on only the selected one
+        for obj_id in self.object_visibility:
+            self.object_visibility[obj_id] = (obj_id == object_id)
+        
+        print(f"Isolation mode: Only {object_id} is now visible")
 
 
 def main():
