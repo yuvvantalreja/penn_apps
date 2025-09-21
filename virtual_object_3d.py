@@ -110,17 +110,20 @@ class VirtualObject3D:
         # Get transformation matrix
         model_matrix = self.get_model_matrix()
         
-        # Choose color based on state
+        # Choose color based on state with Apple Vision Pro inspired colors
         if self.is_in_rotation_mode:
-            color = (0, 255, 255)  # Cyan when in rotation mode
+            color = (255, 200, 100)  # Light cyan for rotation mode (BGR)
         elif self.is_selected:
-            color = (255, 255, 0)  # Bright yellow when selected for rotation
+            color = (120, 200, 255)  # Soft blue when selected (BGR)
         elif self.is_grabbed:
-            color = tuple(min(255, c + 80) for c in self.color)  # Brighter when grabbed
+            # Enhanced brightness with glassmorphism feel
+            color = tuple(min(255, int(c * 1.4)) for c in self.color)
         elif self.highlighted:
-            color = tuple(min(255, c + 40) for c in self.color)  # Slightly brighter when highlighted
+            # Subtle highlight with cool tone
+            color = tuple(min(255, c + 60) for c in self.color)
         else:
-            color = self.color
+            # Base color with slight enhancement for depth
+            color = tuple(min(255, int(c * 1.1)) for c in self.color)
         
         # Choose rendering method based on mode
         if self.render_mode == "wireframe":
@@ -172,14 +175,12 @@ class VirtualObject3D:
         return frame
     
     def _draw_pinchable_radius(self, frame: np.ndarray, renderer: Renderer3D) -> np.ndarray:
-        """Draw the pinchable radius highlighting around the object"""
+        """Draw elegant pinchable radius with glassmorphism effect"""
         # Only draw if this object should show the radius (controlled by selected state)
-        # selected=True means show yellow, selected=False means show blue, None means don't show
         if not hasattr(self, 'selected') or self.selected is None:
             return frame
             
         # Calculate screen position directly without model matrix transformations
-        # This ensures the radius is always centered on the object's actual position
         center_3d = np.array([[self.x, self.y, self.z, 1.0]])
         
         # Use only view and projection matrices, not the model matrix
@@ -201,16 +202,32 @@ class VirtualObject3D:
         # Calculate pinchable radius based on the same logic as is_point_inside
         pinchable_radius = int(max(45, self.bounding_box_size * 65 * self.scale))
         
-        # Choose color based on selection state
+        # Apple Vision Pro inspired colors
         if self.selected:
-            # Yellow highlighting when selected
-            color = (0, 255, 255)  # BGR format: Yellow
+            # Warm blue when selected
+            primary_color = (200, 180, 120)  # BGR format: Warm blue
+            secondary_color = (150, 140, 80)  # Darker variant
         else:
-            # Blue highlighting when not selected
-            color = (255, 0, 0)  # BGR format: Blue
+            # Cool blue when not selected
+            primary_color = (255, 150, 100)  # BGR format: Cool blue
+            secondary_color = (200, 120, 70)   # Darker variant
         
-        # Draw the pinchable radius circle
-        cv2.circle(frame, center, pinchable_radius, color, 2)
+        # Draw glassmorphism-style radius indicator
+        # Outer glow
+        overlay = frame.copy()
+        cv2.circle(overlay, center, pinchable_radius + 5, secondary_color, -1)
+        cv2.addWeighted(overlay, 0.1, frame, 0.9, 0, frame)
+        
+        # Main radius circle with subtle transparency
+        overlay = frame.copy()
+        cv2.circle(overlay, center, pinchable_radius, primary_color, 2)
+        cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
+        
+        # Inner highlight ring for depth
+        cv2.circle(frame, center, pinchable_radius - 3, (255, 255, 255), 1)
+        overlay = frame.copy()
+        cv2.circle(overlay, center, pinchable_radius - 3, (255, 255, 255), 1)
+        cv2.addWeighted(overlay, 0.3, frame, 0.7, 0, frame)
         
         return frame
     

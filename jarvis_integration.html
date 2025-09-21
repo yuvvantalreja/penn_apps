@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AR Hand Control with JARVIS</title>
+    
+    <!-- Include existing stylesheets -->
+    <link rel="stylesheet" href="jarvis_ui.css">
+    
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: #000;
+            font-family: 'Courier New', monospace;
+            overflow: hidden;
+        }
+        
+        #main-container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+        }
+        
+        /* OpenCV video display area */
+        #opencv-display {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: #111;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #fff;
+            font-size: 18px;
+        }
+        
+        /* AR Controls overlay */
+        .ar-controls {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 999;
+            display: flex;
+            gap: 10px;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 10px;
+            border-radius: 10px;
+            border: 1px solid #333;
+        }
+        
+        .control-btn {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid #555;
+            color: #fff;
+            padding: 8px 12px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.3s ease;
+        }
+        
+        .control-btn:hover {
+            background: rgba(255, 255, 255, 0.2);
+            border-color: #777;
+        }
+        
+        .control-btn.active {
+            background: rgba(0, 168, 255, 0.3);
+            border-color: #00a8ff;
+            color: #00a8ff;
+        }
+    </style>
+</head>
+<body>
+    <div id="main-container">
+        <!-- OpenCV video display (this would be replaced by actual video feed) -->
+        <div id="opencv-display">
+            <div>
+                <h2>AR Hand Control with JARVIS Integration</h2>
+                <p>Python application running in background...</p>
+                <p>Press 'J' in the OpenCV window to activate JARVIS</p>
+                <p>Or click the JARVIS indicator to manually activate</p>
+            </div>
+        </div>
+        
+        <!-- JARVIS UI Container -->
+        <div class="jarvis-container" id="jarvis-container">
+            <div class="jarvis-indicator" id="jarvis-indicator"></div>
+            <div class="jarvis-status" id="jarvis-status">Say "Hey JARVIS" to activate</div>
+            <div class="jarvis-controls">
+                <button class="jarvis-btn" onclick="toggleJarvis()">Toggle</button>
+                <button class="jarvis-btn" onclick="testVision()">Test Vision</button>
+            </div>
+            <div class="jarvis-help">
+                Press J key or say "Hey JARVIS"
+            </div>
+        </div>
+        
+        <!-- AR Controls -->
+        <div class="ar-controls">
+            <button class="control-btn" onclick="toggleObjects('2d')">2D Objects</button>
+            <button class="control-btn" onclick="toggleObjects('3d')">3D Objects</button>
+            <button class="control-btn" onclick="toggleWireframe()">Wireframe</button>
+            <button class="control-btn" onclick="resetObjects()">Reset</button>
+            <button class="control-btn" onclick="addObject()">Add Object</button>
+        </div>
+    </div>
+    
+    <!-- Audio Worklet for JARVIS -->
+    <script src="js/audio-recording-worklet.js"></script>
+    
+    <!-- AudioStreamer for voice playback -->
+    <script src="js/audio-streamer.js"></script>
+    
+    <!-- JARVIS Voice Assistant -->
+    <script src="jarvis_voice_assistant.js"></script>
+    
+    <script>
+        // Global variables
+        let jarvisActive = false;
+        
+        // Initialize when page loads
+        document.addEventListener('DOMContentLoaded', async () => {
+            console.log('🚀 Initializing AR Hand Control with JARVIS...');
+            
+            // JARVIS should already be initialized by its own script
+            if (window.jarvisAssistant) {
+                console.log('✅ JARVIS Voice Assistant ready');
+                updateJarvisUI();
+            } else {
+                console.warn('⚠️ JARVIS Voice Assistant not found');
+            }
+            
+            // Listen for keyboard events (J key activation)
+            document.addEventListener('keydown', handleKeyPress);
+            
+            // Make JARVIS indicator clickable
+            const indicator = document.getElementById('jarvis-indicator');
+            if (indicator) {
+                indicator.addEventListener('click', toggleJarvis);
+                indicator.style.cursor = 'pointer';
+            }
+            
+            console.log('✅ AR Hand Control with JARVIS initialized');
+        });
+        
+        // Handle keyboard input
+        function handleKeyPress(event) {
+            // J key - Activate JARVIS
+            if (event.key.toLowerCase() === 'j' && !event.ctrlKey && !event.altKey) {
+                event.preventDefault();
+                console.log('⌨️ J key pressed - activating JARVIS');
+                activateJarvis();
+            }
+            
+            // Other AR control keys
+            switch(event.key.toLowerCase()) {
+                case '1':
+                    toggleObjects('2d');
+                    break;
+                case '2':
+                    toggleObjects('3d');
+                    break;
+                case 'w':
+                    toggleWireframe();
+                    break;
+                case 'r':
+                    resetObjects();
+                    break;
+                case 'c':
+                    addObject();
+                    break;
+            }
+        }
+        
+        // JARVIS control functions
+        async function toggleJarvis() {
+            if (!window.jarvisAssistant) {
+                console.error('❌ JARVIS not available');
+                return;
+            }
+            
+            const status = window.jarvisAssistant.getStatus();
+            
+            if (status.isListening) {
+                console.log('🤖 Deactivating JARVIS...');
+                await window.jarvisAssistant.manualDeactivate();
+            } else {
+                console.log('🤖 Activating JARVIS...');
+                await activateJarvis();
+            }
+            
+            updateJarvisUI();
+        }
+        
+        async function activateJarvis() {
+            if (!window.jarvisAssistant) {
+                console.error('❌ JARVIS not available');
+                return;
+            }
+            
+            try {
+                await window.jarvisAssistant.manualActivate();
+                jarvisActive = true;
+                updateJarvisUI();
+                console.log('✅ JARVIS activated successfully');
+            } catch (error) {
+                console.error('❌ Failed to activate JARVIS:', error);
+            }
+        }
+        
+        function updateJarvisUI() {
+            if (!window.jarvisAssistant) return;
+            
+            const status = window.jarvisAssistant.getStatus();
+            const indicator = document.getElementById('jarvis-indicator');
+            const statusText = document.getElementById('jarvis-status');
+            
+            if (!indicator || !statusText) return;
+            
+            if (status.isListening) {
+                indicator.className = 'jarvis-indicator active';
+                statusText.textContent = 'JARVIS is listening...';
+            } else if (status.isAnalyzing) {
+                indicator.className = 'jarvis-indicator analyzing';
+                statusText.textContent = 'JARVIS is analyzing...';
+            } else if (status.isWakeWordMode) {
+                indicator.className = 'jarvis-indicator';
+                statusText.textContent = 'Say "Hey JARVIS" to activate';
+            } else {
+                indicator.className = 'jarvis-indicator';
+                statusText.textContent = 'JARVIS offline';
+            }
+        }
+        
+        // Test vision analysis function
+        async function testVision() {
+            if (!window.jarvisAssistant) {
+                console.error('❌ JARVIS not available');
+                return;
+            }
+            
+            console.log('🧪 Testing JARVIS vision analysis...');
+            
+            try {
+                // Activate JARVIS if not already active
+                if (!window.jarvisAssistant.getStatus().isListening) {
+                    await activateJarvis();
+                    // Wait a moment for activation
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                }
+                
+                // Simulate a "what is this" question
+                const testMessage = "What do you see in this image, JARVIS?";
+                console.log('🗣️ Simulating user question:', testMessage);
+                
+                // This would normally be spoken, but for testing we can trigger vision analysis directly
+                if (window.jarvisAssistant.performVisualAnalysis) {
+                    await window.jarvisAssistant.performVisualAnalysis();
+                } else {
+                    console.warn('⚠️ Direct vision analysis method not available');
+                }
+                
+            } catch (error) {
+                console.error('❌ Vision test failed:', error);
+            }
+        }
+        
+        // AR Control functions (these would interface with the Python backend)
+        function toggleObjects(type) {
+            console.log(`🎯 Toggling ${type} objects`);
+            // This would send a command to the Python backend
+            // For now, just update UI
+            const btn = event.target;
+            btn.classList.toggle('active');
+        }
+        
+        function toggleWireframe() {
+            console.log('🔲 Toggling wireframe mode');
+            const btn = event.target;
+            btn.classList.toggle('active');
+        }
+        
+        function resetObjects() {
+            console.log('🔄 Resetting objects');
+            // Reset all active buttons
+            document.querySelectorAll('.control-btn.active').forEach(btn => {
+                btn.classList.remove('active');
+            });
+        }
+        
+        function addObject() {
+            console.log('➕ Adding new object');
+        }
+        
+        // Update UI periodically
+        setInterval(updateJarvisUI, 1000);
+        
+        // Handle page visibility changes
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden && window.jarvisAssistant) {
+                // Optionally pause JARVIS when page is hidden
+                console.log('📱 Page hidden - JARVIS continues running');
+            } else if (window.jarvisAssistant) {
+                console.log('📱 Page visible - JARVIS active');
+                updateJarvisUI();
+            }
+        });
+        
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', () => {
+            if (window.jarvisAssistant && window.jarvisAssistant.getStatus().isListening) {
+                window.jarvisAssistant.manualDeactivate();
+            }
+        });
+    </script>
+</body>
+</html>
