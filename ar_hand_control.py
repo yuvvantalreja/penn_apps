@@ -1442,24 +1442,24 @@ class ARHandController:
         vision_glass = (80, 80, 80)        # Glass overlay base
         vision_accent = (255, 150, 0)      # Orange/blue accent
         
-        # Draw minimal header with glassmorphism effect
-        self._draw_glass_panel(frame, (20, 15), (w - 40, 45), alpha=0.15)
+        # # Draw minimal header with glassmorphism effect
+        # self._draw_glass_panel(frame, (20, 15), (w - 40, 45), alpha=0.15)
         
-        # Elegant title with modern typography feel
-        title = "AR SPATIAL CONTROL"
-        title_size = cv2.getTextSize(title, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)[0]
-        title_x = (w - title_size[0]) // 2
-        cv2.putText(frame, title, (title_x, 40), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, vision_silver, 2)
+        # # Elegant title with modern typography feel
+        # title = "AR SPATIAL CONTROL"
+        # title_size = cv2.getTextSize(title, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)[0]
+        # title_x = (w - title_size[0]) // 2
+        # cv2.putText(frame, title, (title_x, 40), 
+        #            cv2.FONT_HERSHEY_SIMPLEX, 0.7, vision_silver, 2)
         
-        # Subtle gesture hint
-        hint = f"Pinch dot: toggle on/off • Drag out: place • Two hands drag: isolate • E: show all • {len(hands_info)} hands detected"
-        hint_size = cv2.getTextSize(hint, cv2.FONT_HERSHEY_SIMPLEX, 0.35, 1)[0]
-        hint_x = (w - hint_size[0]) // 2
-        cv2.putText(frame, hint, (hint_x, 55), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.35, (150, 150, 150), 1)
+        # # Subtle gesture hint
+        # hint = f"Pinch dot: toggle on/off • Drag out: place • Two hands drag: isolate • E: show all • {len(hands_info)} hands detected"
+        # hint_size = cv2.getTextSize(hint, cv2.FONT_HERSHEY_SIMPLEX, 0.35, 1)[0]
+        # hint_x = (w - hint_size[0]) // 2
+        # cv2.putText(frame, hint, (hint_x, 55), 
+        #            cv2.FONT_HERSHEY_SIMPLEX, 0.35, (150, 150, 150), 1)
         
-        # Remove the floating status panel - dock only
+        # # Remove the floating status panel - dock only
         
         # Draw hand interaction indicators with elegance
         self._draw_elegant_hand_indicators(frame, hands_info)

@@ -233,27 +233,34 @@ class JarvisVoiceAssistant {
             reject(error);
         };
     }
-    
     async startJarvisSession() {
         try {
             const jarvisSystemPrompt = `You are JARVIS, Tony Stark's AI assistant from Iron Man. You are sophisticated, helpful, and speak with British elegance and wit.
 
+CRITICAL INSTRUCTION: You must ONLY respond to questions or statements that contain the word "JARVIS" (case-insensitive). If someone asks you something without saying "JARVIS" in their message, you must respond with an empty string - literally nothing at all, no text, no words.
+
 PERSONALITY:
 - Speak with refined British accent and vocabulary
-- Be helpful but occasionally witty or sarcastic
-- Address the user as "Sir" or "Mr. Stark" 
-- Show intelligence and capability in your responses
-- Keep responses concise but informative
+- Be helpful but maintain professional distance
+- Use "Sir" or "Mr. Stark" when addressing the user
+- Show intelligence and technical competence
+- Occasionally display dry wit or subtle humor
 
 CAPABILITIES:
-- You can analyze images and identify objects, components, and details
-- You have access to the current visual context from the AR application
-- You can provide technical analysis of 3D models, CAD components, and engineering elements
+- Analyze screenshots and visual content when asked
+- Provide technical explanations about 3D models, CAD designs, and engineering components
+- Assist with AR hand control system
+- Answer questions about what you observe in images
 
-CONTEXT:
-You will receive visual context about what the user is currently viewing in their AR application. Use this context to answer their questions intelligently and provide relevant information about the objects, models, or components they're working with.
+RESPONSE GUIDELINES:
+- ONLY respond to messages containing "JARVIS"
+- If "JARVIS" is not mentioned, respond with an empty string (no text at all)
+- Keep responses concise but informative
+- Use technical terminology appropriately
+- Be precise in your observations
+- Maintain the sophisticated JARVIS persona at all times
 
-Always be ready to help with technical analysis, object identification, and provide insights about what they're viewing.`;
+You can see what the user is currently viewing through screenshot analysis. When they ask "JARVIS, what is this?" or similar visual questions, you should analyze their current view and provide detailed technical explanations.`;
 
             const setupMessage = {
                 setup: {
@@ -456,10 +463,18 @@ Always be ready to help with technical analysis, object identification, and prov
         try {
             if (content.modelTurn) {
                 const parts = content.modelTurn.parts;
+                let shouldPlayAudio = true;
                 
+                // First pass: check all text parts for empty responses
                 for (const part of parts) {
                     if (part.text) {
                         console.log('🤖 JARVIS text:', part.text);
+                        
+                        // Check if response is empty or just whitespace - if so, don't play audio
+                        if (part.text.trim() === '') {
+                            console.log('🔇 JARVIS response is empty - audio blocked');
+                            shouldPlayAudio = false;
+                        }
                         
                         // Check if JARVIS is asking about visual content OR responding to a visual request
                         if (this.isVisualAnalysisRequest(part.text) || this.isJarvisAskingForImage(part.text)) {
@@ -467,8 +482,11 @@ Always be ready to help with technical analysis, object identification, and prov
                             await this.performVisualAnalysis();
                         }
                     }
-                    
-                    if (part.inlineData && part.inlineData.mimeType?.includes('audio/pcm')) {
+                }
+                
+                // Second pass: only play audio if no "pardon" was found
+                for (const part of parts) {
+                    if (part.inlineData && part.inlineData.mimeType?.includes('audio/pcm') && shouldPlayAudio) {
                         this.streamAudioData(part.inlineData.data);
                     }
                 }
