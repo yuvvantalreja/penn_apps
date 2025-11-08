@@ -72,10 +72,25 @@ class HandGestureDetector:
         
         hands_info = []
         if results.multi_hand_landmarks:
+            handedness_list = results.multi_handedness or []
             for hand_idx, hand_landmarks in enumerate(results.multi_hand_landmarks):
                 hand_info = self._extract_hand_info(hand_landmarks, frame.shape)
                 hand_info['landmarks'] = hand_landmarks
                 hand_info['hand_idx'] = hand_idx
+
+                if hand_idx < len(handedness_list) and handedness_list[hand_idx].classification:
+                    classification = handedness_list[hand_idx].classification[0]
+                    label = classification.label.lower()
+                    hand_info['hand_label'] = label
+                    hand_info['hand_confidence'] = classification.score
+                    hand_info['hand_is_left'] = label == "left"
+                    hand_info['hand_is_right'] = label == "right"
+                else:
+                    hand_info['hand_label'] = "unknown"
+                    hand_info['hand_confidence'] = 0.0
+                    hand_info['hand_is_left'] = False
+                    hand_info['hand_is_right'] = False
+
                 hands_info.append(hand_info)
                 
         return hands_info
@@ -246,6 +261,13 @@ class ARHandController:
                 "color": (100, 150, 255)
             },
             {
+                "path": "online/Needle.obj",
+                "name": "Needle",
+                "position": (-2.5, 1.0, -3.0),
+                "scale": 1.2,
+                "color": (255, 80, 120)
+            },
+            {
                 "path": "ironman_simple.obj",
                 "name": "Iron Man",
                 "position": (3.0, 0.0, -2.0),
@@ -332,7 +354,7 @@ class ARHandController:
         print("- Pinch (thumb + index) near object: Grab object")
         print("- Move hand while pinching: Move object (improved 3D tracking!)")
         print("- Grab object with TWO hands and move apart/closer: Scale object")
-        print("- Two hands: Rotate 3D objects")
+        print("- Two hands: Rotate 3D objects (open left = X-axis tilt, open right = Y-axis spin)")
         print("- 3D objects now follow pinch point more accurately")
         print("Controls:")
         print("- Press 'q' to quit")
@@ -650,6 +672,7 @@ class ARHandController:
                                 rotation_hand_info = next((hand for hand in hands_info if hand['hand_idx'] == hand_idx), None)
                                 if rotation_hand_info:
                                     obj_3d.last_rotation_hand_pos = rotation_hand_info['palm_center']
+                                self._update_rotation_axis_from_hand(obj_3d, hands_info)
                                 
                                 print(f"Object entered rotation mode - Hand {hand_idx} controlling rotation")
                                 
@@ -981,36 +1004,76 @@ class ARHandController:
         rotation_hand_info = next((hand for hand in hands_info if hand['hand_idx'] == rotation_hand), None)
         if rotation_hand_info:
             obj_3d.last_rotation_hand_pos = rotation_hand_info['palm_center']
+        self._update_rotation_axis_from_hand(obj_3d, hands_info)
         
         print(f"Object entered rotation mode - Hand {rotation_hand} controlling rotation")
     
+    def _update_rotation_axis_from_hand(self, obj_3d, hands_info: List[dict]):
+        """Set the active rotation axis based on the controlling hand's handedness"""
+        if obj_3d.rotation_hand_idx is None:
+            obj_3d.rotation_axis = None
+            return
+
+        rotation_hand_info = next((hand for hand in hands_info if hand['hand_idx'] == obj_3d.rotation_hand_idx), None)
+        if not rotation_hand_info:
+            obj_3d.rotation_axis = None
+            return
+
+        label = rotation_hand_info.get('hand_label', 'unknown')
+        if label == 'left':
+            obj_3d.rotation_axis = 'x'
+        elif label == 'right':
+            obj_3d.rotation_axis = 'y'
+        else:
+            obj_3d.rotation_axis = None
+
     def _handle_rotation_mode_3d(self, hands_info: List[dict]):
         """Handle rotation mode for 3D objects"""
         for obj_3d in self.objects_3d:
             if obj_3d.is_in_rotation_mode and obj_3d.rotation_hand_idx is not None:
-                # Get current position of rotation hand
+                # Refresh rotation axis in case handedness changed ordering
+                self._update_rotation_axis_from_hand(obj_3d, hands_info)
+
                 rotation_hand_info = next((hand for hand in hands_info if hand['hand_idx'] == obj_3d.rotation_hand_idx), None)
-                
-                if rotation_hand_info and obj_3d.last_rotation_hand_pos is not None:
-                    current_pos = rotation_hand_info['palm_center']
-                    last_pos = obj_3d.last_rotation_hand_pos
-                    
-                    # Calculate horizontal movement
-                    delta_x = current_pos[0] - last_pos[0]
-                    
-                    # Apply rotation based on horizontal movement
-                    if abs(delta_x) > 5:  # Minimum movement threshold
-                        rotation_sensitivity = 0.01  # Adjust for rotation speed
-                        # Invert rotation direction: left movement = clockwise, right movement = counter-clockwise
-                        obj_3d.rotation_y -= delta_x * rotation_sensitivity
-                        
-                        # Keep rotation in reasonable range
-                        obj_3d.rotation_y = obj_3d.rotation_y % (2 * math.pi)
-                    
-                    # Update last position
+                if not rotation_hand_info:
+                    self._exit_rotation_mode(obj_3d)
+                    continue
+
+                current_pos = rotation_hand_info['palm_center']
+                if obj_3d.last_rotation_hand_pos is None:
                     obj_3d.last_rotation_hand_pos = current_pos
+                    continue
+
+                # Keep rotation intentional: ignore if the controlling hand is still pinching
+                if rotation_hand_info.get('is_pinching', False):
+                    obj_3d.last_rotation_hand_pos = current_pos
+                    continue
+
+                # Optional guard: avoid rotating when fist is detected
+                gestures = rotation_hand_info.get('gestures', [])
+                if 'fist' in gestures and 'open_hand' not in gestures:
+                    obj_3d.last_rotation_hand_pos = current_pos
+                    continue
+
+                last_pos = obj_3d.last_rotation_hand_pos
+                delta_x = current_pos[0] - last_pos[0]
+                delta_y = current_pos[1] - last_pos[1]
+                movement_threshold = 4
+                rotation_sensitivity = 0.01
+                axis = getattr(obj_3d, 'rotation_axis', None)
+
+                if axis == 'x':
+                    if abs(delta_y) > movement_threshold:
+                        obj_3d.rotation_x -= delta_y * rotation_sensitivity
+                        obj_3d.rotation_x = obj_3d.rotation_x % (2 * math.pi)
                 else:
-                    # Hand not detected or no last position - exit rotation mode
+                    if abs(delta_x) > movement_threshold:
+                        obj_3d.rotation_y -= delta_x * rotation_sensitivity
+                        obj_3d.rotation_y = obj_3d.rotation_y % (2 * math.pi)
+
+                obj_3d.last_rotation_hand_pos = current_pos
+            else:
+                if obj_3d.is_in_rotation_mode:
                     self._exit_rotation_mode(obj_3d)
     
     def _exit_rotation_mode(self, obj_3d):
@@ -1022,6 +1085,7 @@ class ARHandController:
         obj_3d.is_in_rotation_mode = False
         obj_3d.rotation_hand_idx = None
         obj_3d.last_rotation_hand_pos = None
+        obj_3d.rotation_axis = None
         print(f"Object exited rotation mode")
                 
     
@@ -1210,8 +1274,14 @@ class ARHandController:
                     cv2.circle(frame, hand_center, 30, (0, 255, 255), 3)  # Cyan circle
                     cv2.circle(frame, hand_center, 25, (0, 255, 255), -1)  # Filled cyan circle
                     
-                    # Draw "ROTATOR" text above the hand
-                    text = "ROTATOR"
+                    # Choose label based on active axis for quick user feedback
+                    axis = getattr(obj_3d, 'rotation_axis', None)
+                    if axis == 'x':
+                        text = "ROTATE X"
+                    elif axis == 'y':
+                        text = "ROTATE Y"
+                    else:
+                        text = "ROTATOR"
                     font = cv2.FONT_HERSHEY_SIMPLEX
                     font_scale = 0.6
                     font_thickness = 2
@@ -1228,26 +1298,51 @@ class ARHandController:
                     # Draw text
                     cv2.putText(frame, text, (text_x, text_y), font, font_scale, (0, 255, 255), font_thickness)
                     
-                    # Draw arrow indicating rotation direction
-                    arrow_length = 20
-                    arrow_x = hand_center[0] + 50
-                    arrow_y = hand_center[1]
-                    
-                    # Draw left arrow (indicating left movement = clockwise)
-                    cv2.arrowedLine(frame, 
-                                  (arrow_x + arrow_length, arrow_y), 
-                                  (arrow_x, arrow_y), 
-                                  (0, 255, 255), 3, tipLength=0.3)
-                    
-                    # Draw right arrow (indicating right movement = counter-clockwise)
-                    cv2.arrowedLine(frame, 
-                                  (arrow_x, arrow_y), 
-                                  (arrow_x + arrow_length, arrow_y), 
-                                  (0, 255, 255), 3, tipLength=0.3)
-                    
-                    # Add labels for arrows
-                    cv2.putText(frame, "CW", (arrow_x - 15, arrow_y - 10), font, 0.4, (0, 255, 255), 1)
-                    cv2.putText(frame, "CCW", (arrow_x + arrow_length - 5, arrow_y - 10), font, 0.4, (0, 255, 255), 1)
+                    # Draw directional hints based on axis mapping
+                    arrow_color = (0, 255, 255)
+                    arrow_length = 35
+                    if axis == 'x':
+                        # Up/down arrows for X-axis tilt
+                        cv2.arrowedLine(
+                            frame,
+                            (hand_center[0], hand_center[1] - 10),
+                            (hand_center[0], hand_center[1] - 10 - arrow_length),
+                            arrow_color,
+                            3,
+                            tipLength=0.3,
+                        )
+                        cv2.arrowedLine(
+                            frame,
+                            (hand_center[0], hand_center[1] + 10),
+                            (hand_center[0], hand_center[1] + 10 + arrow_length),
+                            arrow_color,
+                            3,
+                            tipLength=0.3,
+                        )
+                        cv2.putText(frame, "UP", (hand_center[0] - 20, hand_center[1] - 15 - arrow_length), font, 0.4, arrow_color, 1)
+                        cv2.putText(frame, "DOWN", (hand_center[0] - 30, hand_center[1] + 25 + arrow_length), font, 0.4, arrow_color, 1)
+                    else:
+                        # Left/right arrows for Y-axis yaw
+                        arrow_x = hand_center[0] + 50
+                        arrow_y = hand_center[1]
+                        cv2.arrowedLine(
+                            frame,
+                            (arrow_x + arrow_length, arrow_y),
+                            (arrow_x, arrow_y),
+                            arrow_color,
+                            3,
+                            tipLength=0.3,
+                        )
+                        cv2.arrowedLine(
+                            frame,
+                            (arrow_x, arrow_y),
+                            (arrow_x + arrow_length, arrow_y),
+                            arrow_color,
+                            3,
+                            tipLength=0.3,
+                        )
+                        cv2.putText(frame, "CW", (arrow_x - 15, arrow_y - 10), font, 0.4, arrow_color, 1)
+                        cv2.putText(frame, "CCW", (arrow_x + arrow_length - 5, arrow_y - 10), font, 0.4, arrow_color, 1)
         
         return frame
     
